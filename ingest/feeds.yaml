@@ -1,0 +1,172 @@
+feeds:
+
+  # ── Wayne County ──────────────────────────────────────────────────────
+
+  - id: wayneco_downriver
+    name: "Downriver Public Safety"
+    broadcastify_feed_id: 24330
+    test_stream_url: "https://broadcastify.cdnstream1.com/24330"
+    county: wayne
+    area: downriver
+    enabled: false
+    priority: 1
+
+  - id: wayneco_detroit_police_fire
+    name: "Detroit Police and Fire"
+    broadcastify_feed_id: 41763
+    test_stream_url: "https://broadcastify.cdnstream1.com/41763"
+    county: wayne
+    area: detroit
+    enabled: true
+    priority: 1
+
+  - id: wayneco_detroit_police_dispatch
+    name: "Detroit Police Dispatch"
+    broadcastify_feed_id: 13671
+    test_stream_url: "https://broadcastify.cdnstream1.com/13671"
+    county: wayne
+    area: detroit
+    enabled: true
+    priority: 1
+
+  - id: wayneco_detroit_fire
+    name: "Detroit Fire"
+    broadcastify_feed_id: 18629
+    test_stream_url: "https://broadcastify.cdnstream1.com/18629"
+    county: wayne
+    area: detroit
+    enabled: true
+    priority: 1
+
+  - id: wayneco_public_safety
+    name: "Wayne County Public Safety"
+    broadcastify_feed_id: 34315
+    test_stream_url: "https://broadcastify.cdnstream1.com/34315"
+    county: wayne
+    area: wayne_county
+    enabled: true
+    priority: 1
+
+  - id: wayneco_westland_gardencity
+    name: "Westland-Garden City Police and Fire"
+    broadcastify_feed_id: 43093
+    test_stream_url: "https://broadcastify.cdnstream1.com/43093"
+    county: wayne
+    area: westland_garden_city
+    enabled: false
+    priority: 2
+
+  - id: wayneco_dearborn
+    name: "Dearborn Police and Fire"
+    broadcastify_feed_id: 43097
+    test_stream_url: "https://broadcastify.cdnstream1.com/43097"
+    county: wayne
+    area: dearborn
+    enabled: false
+    priority: 2
+
+  - id: wayneco_grossepointe
+    name: "Grosse Pointes and Harper Woods Police and Fire"
+    broadcastify_feed_id: 15309
+    test_stream_url: "https://broadcastify.cdnstream1.com/15309"
+    county: wayne
+    area: grosse_pointe
+    enabled: false
+    priority: 2
+
+  - id: wayneco_plymouthnorthville
+    name: "Plymouth-Northville Area Public Safety"
+    broadcastify_feed_id: 43889
+    test_stream_url: "https://broadcastify.cdnstream1.com/43889"
+    county: wayne
+    area: plymouth_northville
+    enabled: true
+    priority: 1
+
+  - id: wayneco_southwestern
+    name: "Southwestern Wayne County Police and Fire"
+    broadcastify_feed_id: 44086
+    test_stream_url: "https://broadcastify.cdnstream1.com/44086"
+    county: wayne
+    area: southwestern_wayne
+    enabled: false
+    priority: 2
+
+  - id: wayneco_detroit_ems
+    name: "Detroit EMS Dispatch"
+    broadcastify_feed_id: 29497
+    test_stream_url: "https://broadcastify.cdnstream1.com/29497"
+    county: wayne
+    area: detroit
+    enabled: true
+    priority: 2
+
+  - id: wayneco_romulus
+    name: "Romulus-Huron Township Police and Fire"
+    broadcastify_feed_id: 45577
+    test_stream_url: "https://broadcastify.cdnstream1.com/45577"
+    county: wayne
+    area: romulus
+    enabled: false
+    priority: 3
+
+  - id: wayneco_northville_plymouth_city
+    name: "Northville Police and Fire / Plymouth City Fire"
+    broadcastify_feed_id: 33792
+    test_stream_url: "https://broadcastify.cdnstream1.com/33792"
+    county: wayne
+    area: northville
+    enabled: true
+    priority: 3
+
+  - id: wayneco_franklin_bingham
+    name: "Franklin-Bingham Fire Dispatch"
+    broadcastify_feed_id: 15048
+    test_stream_url: "https://broadcastify.cdnstream1.com/15048"
+    county: wayne
+    area: franklin_bingham
+    enabled: false
+    priority: 4
+
+  # ── Oakland County ────────────────────────────────────────────────────
+
+  - id: oaklandco_royaloak_fire
+    name: "Royal Oak Fire"
+    broadcastify_feed_id: 44322
+    test_stream_url: "https://broadcastify.cdnstream1.com/44322"
+    county: oakland
+    area: royal_oak
+    enabled: false
+    priority: 2
+
+  # ── Washtenaw County ──────────────────────────────────────────────────
+
+  - id: washtenaw_metro
+    name: "Washtenaw County Metro Police and Fire"
+    broadcastify_feed_id: 32245
+    test_stream_url: "https://broadcastify.cdnstream1.com/32245"
+    county: washtenaw
+    area: washtenaw_county
+    enabled: false
+    priority: 1
+
+  - id: washtenaw_livingston
+    name: "Livingston County Public Safety"
+    broadcastify_feed_id: 34799
+    test_stream_url: "https://broadcastify.cdnstream1.com/34799"
+    county: livingston
+    area: livingston_county
+    enabled: false
+    priority: 3
+
+# Pipeline settings applied to all feeds
+settings:
+  chunk_seconds: 25
+  overlap_seconds: 4
+  vad_threshold: 0.5
+  min_speech_duration_ms: 500
+  max_silence_between_chunks_ms: 2000
+  reconnect_delay_seconds: 5
+  reconnect_max_delay_seconds: 120
+  audio_format: wav
+  sample_rate: 16000

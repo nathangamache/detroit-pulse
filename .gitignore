@@ -1,0 +1,98 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+.venv/
+venv/
+env/
+ENV/
+.eggs/
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+.pids/
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ── ML / LoRA models ──────────────────────────────────────────────────────────
+lora/models/
+lora/data/*.jsonl
+lora/data/*.json
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+*.log.*
+pipeline.log
+pipeline_debug.log
+training*.log
+
+# ── Database ──────────────────────────────────────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+db/migrations/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# ── Whisper / Torch cache ─────────────────────────────────────────────────────
+.cache/
+*.cache
+whisper_cache/
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
+patch_*.py
+llama.cpp/

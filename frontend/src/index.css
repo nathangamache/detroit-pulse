@@ -1,0 +1,225 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  /* ── Core palette ── */
+  --navy-950:  #080d14;
+  --navy-900:  #0d1520;
+  --navy-800:  #111e2e;
+  --navy-700:  #162438;
+  --navy-600:  #1c2e47;
+  --navy-500:  #243658;
+  --navy-400:  #2e4370;
+  --slate-400: #475569;
+  --slate-300: #64748b;
+  --slate-200: #94a3b8;
+  --slate-100: #cbd5e1;
+  --slate-50:  #e2e8f0;
+
+  /* ── Semantic colors ── */
+  --bg:         var(--navy-900);
+  --bg2:        var(--navy-800);
+  --bg3:        var(--navy-700);
+  --bg4:        var(--navy-600);
+  --border:     rgba(255, 255, 255, 0.07);
+  --border-md:  rgba(255, 255, 255, 0.11);
+  --border-hi:  rgba(255, 255, 255, 0.18);
+
+  --text:       var(--slate-100);
+  --text-bright: #f1f5f9;
+  --text-muted: var(--slate-200);
+  --text-dim:   var(--slate-300);
+  --text-faint: var(--slate-400);
+
+  /* ── Accent colors ── */
+  --blue:       #3b82f6;
+  --blue-dim:   rgba(59, 130, 246, 0.15);
+  --blue-border:rgba(59, 130, 246, 0.30);
+  --green:      #10b981;
+  --green-dim:  rgba(16, 185, 129, 0.12);
+  --green-border:rgba(16, 185, 129, 0.28);
+  --amber:      #f59e0b;
+  --amber-dim:  rgba(245, 158, 11, 0.12);
+  --amber-border:rgba(245, 158, 11, 0.28);
+  --red:        #ef4444;
+  --red-dim:    rgba(239, 68, 68, 0.12);
+  --red-border: rgba(239, 68, 68, 0.28);
+  --purple:     #8b5cf6;
+  --purple-dim: rgba(139, 92, 246, 0.12);
+
+  /* ── Incident type colors ── */
+  --fire-color:    #f97316;
+  --fire-bg:       rgba(249, 115, 22, 0.10);
+  --fire-border:   rgba(249, 115, 22, 0.25);
+  --medical-color: #3b82f6;
+  --medical-bg:    rgba(59, 130, 246, 0.10);
+  --medical-border:rgba(59, 130, 246, 0.25);
+  --police-color:  #8b5cf6;
+  --police-bg:     rgba(139, 92, 246, 0.10);
+  --police-border: rgba(139, 92, 246, 0.25);
+  --hazmat-color:  #f59e0b;
+  --hazmat-bg:     rgba(245, 158, 11, 0.10);
+  --hazmat-border: rgba(245, 158, 11, 0.25);
+
+  /* ── Typography ── */
+  --font:    'Barlow', -apple-system, sans-serif;
+  --mono:    'DM Mono', 'Fira Code', monospace;
+  --cond:    'Barlow Condensed', 'Barlow', sans-serif;
+
+  /* ── Layout ── */
+  --radius-sm:  4px;
+  --radius:     6px;
+  --radius-md:  8px;
+  --radius-lg:  12px;
+
+  /* ── Transitions ── */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ── Legacy aliases (backward compat with AudioPlayer, AdminPanel, Map) ── */
+  --bg-card:     var(--navy-700);
+  --accent:      #3b82f6;
+  --accent-dim:  rgba(59,130,246,0.15);
+  --green-bright:#10b981;
+  --blue-bright: #3b82f6;
+  --amber-bright:#f59e0b;
+  --red-bright:  #ef4444;
+}
+
+html, body, #root {
+  height: 100%; width: 100%;
+  overflow: hidden;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.20); }
+
+/* ── Buttons ── */
+button {
+  font-family: var(--font);
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+}
+
+/* ── Incident type tags ── */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--cond);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  line-height: 1;
+}
+
+.tag-fire        { color: var(--fire-color);    background: var(--fire-bg);    border-color: var(--fire-border); }
+.tag-medical     { color: var(--medical-color); background: var(--medical-bg); border-color: var(--medical-border); }
+.tag-shooting    { color: var(--red);           background: var(--red-dim);    border-color: var(--red-border); }
+.tag-assault     { color: var(--red);           background: var(--red-dim);    border-color: var(--red-border); }
+.tag-police      { color: var(--police-color);  background: var(--police-bg);  border-color: var(--police-border); }
+.tag-hazmat      { color: var(--hazmat-color);  background: var(--hazmat-bg);  border-color: var(--hazmat-border); }
+.tag-unknown     { color: var(--text-dim);      background: rgba(255,255,255,0.04); border-color: var(--border-md); }
+
+/* ── Priority badges ── */
+.priority-badge {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+.priority-high     { color: var(--red);   background: var(--red-dim);   }
+.priority-medium   { color: var(--amber); background: var(--amber-dim); }
+.priority-low      { color: var(--green); background: var(--green-dim); }
+.priority-unknown  { color: var(--text-dim); background: rgba(255,255,255,0.05); }
+
+/* ── Card surface ── */
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+/* ── Dividers ── */
+.divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0;
+}
+
+/* ── Status dot ── */
+.status-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.status-dot.live    { background: var(--green); box-shadow: 0 0 0 3px var(--green-dim); }
+.status-dot.offline { background: var(--red); }
+.status-dot.idle    { background: var(--amber); }
+
+/* ── Field label ── */
+.field-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 4px;
+  display: block;
+}
+
+/* ── Mono value ── */
+.mono-val {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── Unit chip ── */
+.unit-chip {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid var(--green-border);
+  background: var(--green-dim);
+  color: var(--green);
+  display: inline-block;
+}
+.unit-chip.cleared {
+  opacity: 0.4;
+  text-decoration: line-through;
+  border-color: var(--border-md);
+  background: transparent;
+  color: var(--text-faint);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 3px rgba(16,185,129,0.2); }
+  50%       { opacity: 0.7; box-shadow: 0 0 0 5px rgba(16,185,129,0.05); }
+}
