@@ -11,6 +11,9 @@ dependencies = [
     # Transcription (CPU). faster-whisper ships Silero VAD via onnxruntime and
     # decodes mp3/wav through PyAV, so neither torch nor an ffmpeg binary is needed.
     "faster-whisper==1.2.1",
+    # faster-whisper 1.2.1 calls av.open(..., metadata_errors="ignore"); PyAV 19 removed that
+    # keyword (TypeError on every file), so stay below 19 until faster-whisper catches up.
+    "av>=16,<19",
     "numpy>=2.0,<3",
     # API
     "fastapi>=0.115,<1",
