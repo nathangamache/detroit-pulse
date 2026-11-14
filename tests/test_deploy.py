@@ -55,6 +55,55 @@ def test_networks_and_profiles():
     assert c["volumes"]["pulse_pgdata"]["external"] is True
 
 
+# Pinned for the godseye host firewall (godseye-detroit-connector deploy/host-firewall/), which
+# names these subnets; the connector pins its tailscale sidecar at 172.30.80.20 on godseye_backend.
+PINNED = {"pulse_internal": "172.30.81.0/24", "pulse_egress": "172.30.82.0/24", "pulse_debug": "172.30.83.0/24"}
+BACKEND = ("172.30.80.0/24", "172.30.80.1")
+
+
+def test_pulse_networks_have_pinned_subnets():
+    import ipaddress
+    c = _compose()
+    nets = c["networks"]
+    seen = [ipaddress.ip_network(BACKEND[0])]
+    for name, subnet in PINNED.items():
+        cfg = nets[name]["ipam"]["config"]
+        assert cfg == [{"subnet": subnet, "gateway": str(ipaddress.ip_network(subnet)[1])}], name
+        net = ipaddress.ip_network(subnet)
+        assert net.subnet_of(ipaddress.ip_network("172.30.0.0/16")) and net.prefixlen == 24, name
+        assert not any(net.overlaps(o) for o in seen), name
+        seen.append(net)
+    assert nets["pulse_internal"]["internal"] is True
+    assert not nets["pulse_egress"].get("internal") and not nets["pulse_debug"].get("internal")
+    # only the two workers that call out (Anthropic, geocoders, Whisper download) get pulse_egress
+    on_egress = {n for n, s in c["services"].items() if "pulse_egress" in (s.get("networks") or [])}
+    assert on_egress == {"pulse-transcribe", "pulse-extract"}
+    on_debug = {n for n, s in c["services"].items() if "pulse_debug" in (s.get("networks") or [])}
+    assert on_debug == {"pulse-debug"}
+
+
+def test_every_service_uses_public_dns_without_search_domain():
+    for name, s in _compose()["services"].items():
+        assert s.get("dns") == ["${PULSE_DNS_1:-1.1.1.1}", "${PULSE_DNS_2:-9.9.9.9}"], name
+        assert s.get("dns_search") == ["."], name
+
+
+def test_setup_pins_and_checks_godseye_backend():
+    text = (REPO / "deploy" / "setup.sh").read_text()
+    assert f'NET_SUBNET="${{GODSEYE_BACKEND_SUBNET:-{BACKEND[0]}}}"' in text
+    assert f'NET_GATEWAY="${{GODSEYE_BACKEND_GATEWAY:-{BACKEND[1]}}}"' in text
+    assert '--internal --subnet "$NET_SUBNET" --gateway "$NET_GATEWAY"' in text
+    # an existing network with another subnet (or not internal) stops setup.sh
+    assert '"$have" != "$NET_SUBNET $NET_GATEWAY" || "$internal" != "true"' in text
+    # the subnets it warns about are the ones compose pins
+    import re
+    specs = dict(x.split("=") for x in re.search(r"for spec in ([^;]+);", text).group(1).split())
+    assert specs == PINNED
+    # the few-shot hint never changes the file's mode
+    assert "setfacl -m u:10010:r" in text
+    assert not re.search(r"^\s*(chmod|chown|setfacl)\b.*FEWSHOTS", text, re.M)
+
+
 def test_sample_rail_conf_has_no_channels_and_required_settings():
     text = (REPO / "deploy" / "sdr" / "rail.conf").read_text()
     for needle in ('serial = "RAIL160"', "centerfreq = 160.8975", "sample_rate = 2.56", R.MARKER):

@@ -24,7 +24,24 @@
 # the same container names and data volumes, so only one of the two can run at a time.
 # Secrets: deploy/secrets/*.env, mode 600 (setup.sh). No docker socket, no home directory mounts:
 # only the repo's config/ and the geocoder index directory are bind-mounted, read-only.
+#
+# Networks (subnets pinned: the godseye host firewall, godseye-detroit-connector
+# deploy/host-firewall/godseye-firewall.sh, drops traffic from each of them to the host itself,
+# RFC 1918, the tailnet's 100.64.0.0/10 and link-local; members of one subnet still reach each other):
+#   godseye_backend  172.30.80.0/24  pulse-api, the gateway's tailscale sidecar .20   INTERNAL (setup.sh)
+#   pulse_internal   172.30.81.0/24  every core service                             INTERNAL
+#   pulse_egress     172.30.82.0/24  pulse-transcribe, pulse-extract                internet only
+#   pulse_debug      172.30.83.0/24  pulse-debug (profile debug, 127.0.0.1 ports)
+# DNS: public resolvers (PULSE_DNS_1 / PULSE_DNS_2) and no search domain, so neither the LAN router,
+# MagicDNS nor the host's tailnet search domain is used; service names still resolve through
+# Docker's embedded DNS.
 version: "2.4"
+
+# Same settings as the connector's containers. Services on internal networks only have no route
+# to the resolvers, so they can't look up external names at all.
+x-dns: &dns
+  dns: ["${PULSE_DNS_1:-1.1.1.1}", "${PULSE_DNS_2:-9.9.9.9}"]
+  dns_search: ["."]
 
 x-hardening: &hardening
   read_only: true
@@ -55,7 +72,7 @@ x-pulse-env: &pulse-env
 
 services:
   pulse-postgis:
-    <<: *hardening
+    <<: [*hardening, *dns]
     image: postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5
     container_name: pulse-postgis
     # the data directory is owned by postgres (999); running as 999 skips the root entrypoint
@@ -87,7 +104,7 @@ services:
     networks: [pulse_internal]
 
   pulse-redis:
-    <<: *hardening
+    <<: [*hardening, *dns]
     image: redis:7-alpine@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065
     container_name: pulse-redis
     user: "999:1000"
@@ -116,7 +133,7 @@ services:
     networks: [pulse_internal]
 
   pulse-api:
-    <<: *hardening
+    <<: [*hardening, *dns]
     image: detroit-pulse:0.2.0
     build: { context: .., dockerfile: deploy/docker/Dockerfile }
     container_name: pulse-api
@@ -146,7 +163,7 @@ services:
         aliases: [pulse-api]
 
   pulse-transcribe:
-    <<: *hardening
+    <<: [*hardening, *dns]
     image: detroit-pulse:0.2.0
     container_name: pulse-transcribe
     user: "10010:10010"
@@ -179,7 +196,7 @@ services:
     networks: [pulse_internal, pulse_egress]
 
   pulse-extract:
-    <<: *hardening
+    <<: [*hardening, *dns]
     image: detroit-pulse:0.2.0
     container_name: pulse-extract
     user: "10010:10010"
@@ -209,7 +226,7 @@ services:
 
   # ── optional ──────────────────────────────────────────────────────────────
   pulse-frontend:
-    <<: *hardening
+    <<: [*hardening, *dns]
     profiles: [frontend]
     image: detroit-pulse-ui:0.2.0
     build: { context: .., dockerfile: deploy/docker/frontend.Dockerfile }
@@ -224,7 +241,7 @@ services:
     cpus: 0.5
 
   pulse-debug:
-    <<: *hardening
+    <<: [*hardening, *dns]
     profiles: [debug]
     image: detroit-pulse:0.2.0
     container_name: pulse-debug
@@ -245,7 +262,7 @@ services:
   # Host prerequisites (docs/godseye-integration.md#sdr): udev rule giving plugdev (gid 46) access to
   # 0bda:2838, DVB driver blacklisted, dongle serials set with rtl_eeprom (RAIL160, EOT457).
   rail-airband:
-    <<: *hardening
+    <<: [*hardening, *dns]
     profiles: [sdr]
     image: ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1@sha256:e6da94e62ea7ccbdc5beb0031717c7dd41dfbb383be3674abc7333560d0a5c80
     container_name: rail-airband
@@ -268,7 +285,7 @@ services:
     cpus: 1.5
 
   traintap-eot:
-    <<: *hardening
+    <<: [*hardening, *dns]
     profiles: [sdr]
     image: ghcr.io/trickv/traintap:sha-984af85@sha256:fbfb60d996c95deb620ca0e6f2c7f161d417ca457f64cf48fe550cd8b6f971db
     container_name: traintap-eot
@@ -312,18 +329,33 @@ volumes:
   pulse_models:
     name: pulse_models
 
+# Subnets pinned for the godseye host firewall (see the header). A network that already exists with
+# another subnet must be removed first: `docker-compose -p pulse down` (volumes are kept).
 networks:
   pulse_internal:
     name: pulse_internal
     driver: bridge
     internal: true
+    ipam:
+      config:
+        - subnet: 172.30.81.0/24
+          gateway: 172.30.81.1
   pulse_egress:
     name: pulse_egress
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.82.0/24
+          gateway: 172.30.82.1
   pulse_debug:
     name: pulse_debug
     driver: bridge
-  # created by setup.sh; the gateway's compose joins it too (docs/godseye-integration.md)
+    ipam:
+      config:
+        - subnet: 172.30.83.0/24
+          gateway: 172.30.83.1
+  # created by setup.sh (--internal, 172.30.80.0/24); the connector's tailscale sidecar joins it
+  # at 172.30.80.20 (docs/godseye-integration.md)
   godseye_backend:
     external: true
     name: godseye_backend

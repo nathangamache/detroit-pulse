@@ -92,8 +92,10 @@ docker-compose -p pulse build && docker-compose -p pulse up -d
 Hardened containers (non-root, read-only roots, no capabilities, limits, no published ports):
 pulse-api on the `godseye_backend` network as `http://pulse-api:7710`, two pipeline workers,
 PostGIS and Redis on the existing data volumes, optional UI volume for the gateway, and an `sdr`
-profile for rtl_airband/traintap. The connector needs a small compose change (a patch, not yet
-applied). Everything is in [docs/godseye-integration.md](docs/godseye-integration.md).
+profile for rtl_airband/traintap. Every network has a pinned subnet (172.30.80.0/24 through
+172.30.83.0/24) covered by the connector's host firewall, and every container uses public DNS with
+no search domain. The connector's compose file already joins `godseye_backend`. Everything is in
+[docs/godseye-integration.md](docs/godseye-integration.md).
 For UI development, `cd frontend && npm run dev` proxies `/pulse/api` to the local API.
 
 ## Tests and evals

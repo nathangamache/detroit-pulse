@@ -5,24 +5,85 @@
 `PULSE_URL=http://pulse-api:7710` over a dedicated network; nothing is published on the host.
 
 ```
-                         godseye network (172.30.77.0/24, connector)
+                         godseye-edge (172.30.77.0/24, connector)
   cloudflared ──▶ tailscale sidecar ◀── gateway (network_mode: service:tailscale)
-                        │
-                        │ godseye_backend  (external, --internal: no egress)
+                        │ .20
+                        │ godseye_backend  172.30.80.0/24 (external, --internal: no egress)
                         ▼
                     pulse-api :7710 ──────────┐
-                        │ pulse_internal (internal: no egress)
+                        │ pulse_internal  172.30.81.0/24 (internal: no egress)
      pulse-postgis ─────┼───── pulse-redis    │
      pulse-transcribe ──┤                     │
      pulse-extract ─────┘                     │
-            │ pulse_egress (Anthropic, Census/Photon, first Whisper download)
-            ▼ internet
+            │ pulse_egress  172.30.82.0/24 (Anthropic, Census/Photon, first Whisper download)
+            ▼ internet only (host firewall: no host, LAN or tailnet)
   pulse_frontend volume ──(read-only)──▶ gateway PULSE_STATIC_DIR=/pulse-ui
 ```
 
 Only `pulse-api` and the tailscale sidecar (whose network namespace the gateway shares) are on
 `godseye_backend`, so cloudflared and the GEV containers can't reach Pulse directly. Postgres and
 Redis are on `pulse_internal` only.
+
+## Networks, DNS and the host firewall
+
+Every subnet is pinned, so the godseye host firewall (`godseye-detroit-connector`
+`deploy/host-firewall/godseye-firewall.sh`, its `docs/host-firewall.md`) can name it:
+
+| network | subnet | members | egress |
+|---|---|---|---|
+| `godseye_backend` | `172.30.80.0/24` (gateway `.1`) | `pulse-api`, the connector's tailscale sidecar `.20` | none (`--internal`, created by `setup.sh`) |
+| `pulse_internal` | `172.30.81.0/24` | postgis, redis, api, transcribe, extract (and debug) | none (`internal: true`) |
+| `pulse_egress` | `172.30.82.0/24` | `pulse-transcribe`, `pulse-extract` | internet only |
+| `pulse_debug` | `172.30.83.0/24` | `pulse-debug` (profile `debug`) | internet only (unused: it exists for the 127.0.0.1 ports) |
+
+Even an internal bridge gives the host an address on it (the `.1` gateway), and `pulse_egress`
+routes through the host, so without the firewall a Pulse container could open connections to every
+host service listening on `0.0.0.0` and, from `pulse_egress`, to the LAN and the tailnet. For
+traffic **from** each of the four subnets the firewall drops new connections to the host itself
+(`INPUT`, replies allowed) and, in `DOCKER-USER`, everything to RFC 1918, `100.64.0.0/10`
+(the tailnet, including `100.100.100.100`), link-local, multicast and reserved space. Members of
+one subnet still reach each other (`-s S -d S`), no other network is let into these subnets, and
+what's left for `pulse_egress` (and `pulse_debug`) is the public internet. Re-install the
+firewall whenever these subnets change (`sudo install ... godseye-firewall.sh` and
+`sudo systemctl reload godseye-firewall.service`, see the connector's `docs/host-firewall.md`).
+
+A network that compose created before the subnets were pinned keeps its old subnet:
+`docker-compose -p pulse down` (named volumes are kept; `godseye_backend` is external and stays),
+then `docker-compose -p pulse up -d`. `setup.sh` warns about such a network, and refuses to go on
+if `godseye_backend` exists without `172.30.80.0/24` / `.1` / `--internal`.
+
+**DNS.** Every service has `dns: [1.1.1.1, 9.9.9.9]` (override with `PULSE_DNS_1` /
+`PULSE_DNS_2`; keep them public) and `dns_search: ["."]`, the same as the connector's containers.
+Docker's embedded resolver (`127.0.0.11`) still resolves the service names; names it doesn't know
+go to the public resolvers instead of the host's (the LAN router or MagicDNS, which the firewall
+drops), and the host's tailnet search domain is not copied into `/etc/resolv.conf`, so a tailnet
+device named like a service can't capture its traffic. Containers on internal networks only
+(postgis, redis, api) have no route to the resolvers and so can't resolve external names at all.
+
+Check after `up`, and after a firewall re-install:
+
+```bash
+docker network inspect pulse_internal pulse_egress pulse_debug godseye_backend \
+  --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}} internal={{.Internal}}'
+docker exec pulse-api cat /etc/resolv.conf              # nameserver 127.0.0.11, no "search" line
+# Socket probe: "blocked" = dropped or no route. The host's LAN address and the LAN router:
+LAN=$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+ROUTER=$(ip -4 route show default | awk '{print $3; exit}')
+probe() { c=$1; shift; docker exec "$c" python -c '
+import socket, sys
+for t in sys.argv[1:]:
+    want, h, p = t.split(":")
+    try: socket.create_connection((h, int(p)), timeout=4).close(); got = "open"
+    except (socket.timeout, OSError) as e: got = "refused" if isinstance(e, ConnectionRefusedError) else "blocked"
+    print("PASS" if got == want else "FAIL", want, h, p, got)' "$@"; }
+probe pulse-api blocked:172.30.81.1:22 blocked:172.30.80.1:22 blocked:$LAN:22
+probe pulse-transcribe blocked:172.30.82.1:22 blocked:172.30.81.1:22 blocked:$LAN:22 \
+  blocked:$ROUTER:53 blocked:100.100.100.100:53 open:1.1.1.1:443
+probe pulse-extract blocked:172.30.82.1:22 blocked:$LAN:22 open:api.anthropic.com:443
+```
+
+`refused` for a `blocked` target means the packet got through (nothing listens there): the
+firewall isn't covering that subnet.
 
 ## Services
 
@@ -58,11 +119,30 @@ docker-compose -p pulse up -d
 docker-compose -p pulse --profile frontend up -d pulse-frontend      # refresh the UI volume
 ```
 
-`setup.sh` creates, only if missing: the `godseye_backend` network (`--internal`), the volumes
+`setup.sh` creates, only if missing: the `godseye_backend` network (`--internal`, `--subnet
+172.30.80.0/24 --gateway 172.30.80.1`; an existing one must match, see
+[Networks](#networks-dns-and-the-host-firewall)), the volumes
 `detroit-pulse_pulse_pgdata`, `detroit-pulse_pulse_redisdata` and `pulse_frontend`, and
 `deploy/secrets/{postgres,redis,api,anthropic}.env` (dir 700, files 600; see
 [deploy/secrets/README.md](../deploy/secrets/README.md)). Copy `PULSE_API_TOKEN` from
 `deploy/secrets/api.env` into the connector's `deploy/secrets/gateway.env`.
+
+### Few-shot file (read access for uid 10010)
+
+`pulse-extract` runs as uid 10010 and reads the gitignored `config/fewshots.local.jsonl`
+(`LLM_FEWSHOT_FILE`, through the read-only `config/` mount). The file is private (mode 640 or
+600, owned by you), so grant that one uid read access with an ACL instead of changing its mode:
+
+```bash
+setfacl -m u:10010:r config/fewshots.local.jsonl
+getfacl -p config/fewshots.local.jsonl        # user:10010:r--, no "#effective:---"
+```
+
+`config/` itself must stay searchable by others (mode 755 or 775). Without access the
+extractor fails when it builds its prompt (`PermissionError`: the file exists, so there is no
+fallback to the built-in synthetic examples). `setup.sh` prints this hint when the file exists and
+uid 10010 can't read it. `scripts/build_fewshots.py` rewrites the file in place, which keeps the
+ACL; anything that replaces it (a new file moved over it) drops the ACL, so run `setfacl` again.
 
 Settings you may want in `deploy/.env` (gitignored, read by compose for interpolation):
 `WHISPER_MODEL` (default `small.en`), `PULSE_LLM_ENABLED`, `GEOCODER_PROVIDERS`,
@@ -97,70 +177,23 @@ Going back to dev mode: `docker-compose -p pulse down` in `deploy/` (volumes are
 Tests and the host-run tools (`start.sh`, `pytest`, alembic) expect Postgres/Redis on
 127.0.0.1:5436/6381: use the dev stack, or start the container stack's `debug` profile.
 
-## Connector-side change (not applied)
+## Connector side
 
-The gateway lives in the tailscale sidecar's network namespace, so the **sidecar** joins
-`godseye_backend`; the gateway also mounts the UI volume and turns on its `/pulse/api` proxy.
-Against `godseye-detroit-connector` @ `23b5728` (also in
-[godseye-connector-compose.patch](godseye-connector-compose.patch); `git apply --check` passes and
-`docker-compose config` accepts the result):
+The connector's `deploy/docker-compose.yml` already has everything Pulse needs:
 
-```diff
---- a/deploy/docker-compose.yml
-+++ b/deploy/docker-compose.yml
-@@ -150,6 +150,9 @@
-         ipv4_address: 172.30.77.20
-         # cloudflared reaches the gateway's PUBLIC listener as http://gateway:7700.
-         aliases: [gateway]
-+      # Detroit Pulse: the gateway shares this namespace and reaches http://pulse-api:7710 here.
-+      # Internal network (no egress); only pulse-api and this sidecar are on it.
-+      godseye_backend: {}
- 
-   gateway:
-     <<: *hardening
-@@ -181,11 +184,15 @@
-       # Only cloudflared's fixed address may set CF-Connecting-IP.
-       TRUSTED_PROXY_IPS: 172.30.77.10
-       PULSE_URL: ${PULSE_URL:-http://pulse-api:7710}
-+      # Pulse UI: static build that Pulse's pulse-frontend service copies into pulse_frontend
-+      PULSE_STATIC_DIR: /pulse-ui
-+      PULSE_API_PROXY: "true"
-       HOME: /tmp
-       UV_THREADPOOL_SIZE: "4"
-     env_file: [./secrets/gateway.env]
-     volumes:
-       - gateway-data:/data
-+      - pulse-ui:/pulse-ui:ro
-     tmpfs: ["/tmp:size=64m,mode=1777"]
-     mem_limit: 768m
-     memswap_limit: 768m
-@@ -217,6 +224,10 @@
-   gev-cache:
-   gev-logs:
-   gev-dotcache:
-+  # created by detroit-pulse/deploy/setup.sh, filled by Pulse's pulse-frontend service
-+  pulse-ui:
-+    external: true
-+    name: pulse_frontend
- 
- networks:
-   godseye:
-@@ -225,3 +236,7 @@
-     ipam:
-       config:
-         - subnet: 172.30.77.0/24
-+  # created by detroit-pulse/deploy/setup.sh (docker network create --internal godseye_backend)
-+  godseye_backend:
-+    external: true
-+    name: godseye_backend
-```
+* the tailscale **sidecar** joins `godseye_backend` (external, under the key `pulse`) at the fixed
+  address `172.30.80.20`, so `up` fails on a network created without the pinned subnet; the
+  gateway shares the sidecar's network namespace and reaches `PULSE_URL=http://pulse-api:7710`.
+  Nothing else in that stack joins it.
+* the gateway mounts the `pulse_frontend` volume read-only at `/pulse-ui` and sets
+  `PULSE_STATIC_DIR=/pulse-ui` and `PULSE_API_PROXY=true` (UI at `/pulse` on the UI listener,
+  `/pulse/api` proxied to Pulse with the token).
+* its `deploy/secrets/gateway.env` holds `PULSE_API_TOKEN=<the value from Pulse's
+  deploy/secrets/api.env>`.
 
-Plus, in the connector's `deploy/secrets/gateway.env`: `PULSE_API_TOKEN=<the value from Pulse's
-deploy/secrets/api.env>`. Order: run Pulse's `setup.sh` first (the connector stack refuses to
-start while the external network or volume is missing). Notes for the reviewer:
+Order: Pulse's `setup.sh` first (the connector stack refuses to start while the external network
+or volume is missing). Notes:
 
-* The sidecar gains a second interface on an internal bridge. The netstack's loopback re-dial
-  concern in the connector header doesn't change: nothing new listens in that namespace.
 * The gateway's proxy treats `Upgrade` as hop-by-hop, so the UI's WebSocket (`/pulse/api/ws`)
   won't connect through it; the UI falls back to polling the REST API.
 * UI files are world-readable (644/755) and owned by uid 10010, so the gateway's uid 10001 can
