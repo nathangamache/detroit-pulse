@@ -15,8 +15,6 @@ var/
 sdist/
 develop-eggs/
 .installed.cfg
-lib/
-lib64/
 .venv/
 venv/
 env/
@@ -64,7 +62,8 @@ training*.log
 *.sqlite3
 *.db
 *.sql
-db/migrations/
+!db/schema.sql
+*.dump
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
@@ -96,3 +95,15 @@ whisper_cache/
 *.orig
 patch_*.py
 llama.cpp/
+# ── Pulse local data (never commit) ───────────────────────────────────────────
+# Personal coverage areas, channel plans, few-shot transcripts and all audio
+# stay on the box. Committed config files hold generic examples only.
+config/*.local.yaml
+config/*.local.jsonl
+data/
+*.mp3
+*.wav
+*.m4a
+*.cf32
+frontend/.env*
+!frontend/.env.example

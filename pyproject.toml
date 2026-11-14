@@ -1,0 +1,53 @@
+[project]
+name = "detroit-pulse"
+version = "0.2.0"
+description = "Scanner-radio incident pipeline for Metro Detroit (CPU-only, Claude Haiku extraction, SDR ingest)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+dependencies = [
+    # Extraction
+    "anthropic==2.8.0",
+    # Transcription (CPU). faster-whisper ships Silero VAD via onnxruntime and
+    # decodes mp3/wav through PyAV, so neither torch nor an ffmpeg binary is needed.
+    "faster-whisper==1.2.1",
+    "numpy>=2.0,<3",
+    # API
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    # Storage
+    "sqlalchemy>=2.0.35,<2.2",
+    "alembic>=1.13,<2",
+    "psycopg[binary]>=3.2,<4",
+    "geoalchemy2>=0.15,<1",
+    "redis>=5.0,<9",
+    # HTTP for the free geocoders (Census, Nominatim, Photon)
+    "httpx>=0.27,<1",
+    # Config / logging
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.5,<3",
+    "python-dotenv>=1.0,<2",
+    "pyyaml>=6.0,<7",
+    "structlog>=24.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.uv]
+# This is an application, not a library: install deps only, run from the repo root.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "db: needs the PostGIS test database on 127.0.0.1:5436",
+    "whisper: loads a real faster-whisper model (slow; run under nice)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:websockets.*",
+]
