@@ -1,86 +1,38 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Start Detroit Pulse on a shared host: PostGIS + Redis (127.0.0.1 only), migrations,
+# the API on 127.0.0.1:7710 and the pipeline, everything at nice 19 with capped threads.
+#
+#   ./start.sh                 # services + API + pipeline (all stages)
+#   ./start.sh api             # services + API only
+#   STAGES=extract,resolver ./start.sh
+# Stop with ./stop.sh (add --services to also stop the containers).
+set -euo pipefail
 cd "$(dirname "$0")"
-SCRIPT_DIR="$(pwd)"
+mkdir -p logs .pids data/sdr data/traintap
 
-echo "================================================"
-echo "  DETROIT PULSE — Starting services"
-echo "================================================"
-echo ""
-
-echo "Waiting for PostgreSQL..."
-until docker exec detroitpulse-postgres pg_isready -U detroit -q 2>/dev/null; do
-    sleep 1
+docker-compose up -d
+echo "waiting for PostGIS and Redis health..."
+for _ in $(seq 1 60); do
+  pg=$(docker inspect -f '{{.State.Health.Status}}' pulse-postgis 2>/dev/null || true)
+  rd=$(docker inspect -f '{{.State.Health.Status}}' pulse-redis 2>/dev/null || true)
+  [[ "$pg" == healthy && "$rd" == healthy ]] && break
+  sleep 2
 done
-echo "  ✓ PostgreSQL ready"
 
-echo "Waiting for Redis..."
-until docker exec detroitpulse-redis redis-cli ping 2>/dev/null | grep -q PONG; do
-    sleep 1
-done
-echo "  ✓ Redis ready"
+uv sync --frozen --quiet
+PY=.venv/bin/python             # run the venv python directly so the pid file holds the real process
+$PY -m alembic upgrade head
 
-echo ""
-echo "Building frontend..."
-cd "$SCRIPT_DIR/frontend"
-node_modules/.bin/vite build > "$SCRIPT_DIR/logs/frontend_build.log" 2>&1
-if [ $? -eq 0 ]; then
-    echo "  ✓ Frontend built"
-else
-    echo "  ✗ Frontend build failed — check logs/frontend_build.log"
-    exit 1
+# keep this box's other services responsive
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}" MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
+
+nice -n 19 $PY -m api >> logs/api.log 2>&1 &
+echo $! > .pids/api.pid
+echo "API on 127.0.0.1:${PULSE_API_PORT:-7710} (pid $(cat .pids/api.pid), log logs/api.log)"
+
+if [[ "${1:-}" != "api" ]]; then
+  nice -n 19 $PY run_pipeline.py --stages "${STAGES:-ingest,transcribe,extract,resolver}" \
+    >> logs/pipeline.log 2>&1 &
+  echo $! > .pids/pipeline.pid
+  echo "pipeline (pid $(cat .pids/pipeline.pid), log logs/pipeline.log)"
 fi
-cd "$SCRIPT_DIR"
-
-echo ""
-echo "Starting services..."
-mkdir -p "$SCRIPT_DIR/logs" "$SCRIPT_DIR/.pids"
-export OLLAMA_NUM_PARALLEL=4
-export OLLAMA_MAX_LOADED_MODELS=2
-
-# API server on port 8080 — serves both API and built frontend
-echo "  → Starting API + frontend server on port 8080"
-"$SCRIPT_DIR/.venv/bin/uvicorn" api.main:app \
-    --host 0.0.0.0 --port 8080 \
-    > "$SCRIPT_DIR/logs/api.log" 2>&1 &
-echo $! > "$SCRIPT_DIR/.pids/api.pid"
-echo "    PID: $(cat $SCRIPT_DIR/.pids/api.pid)"
-
-# Wait for API
-until curl -s http://localhost:8080/health > /dev/null 2>&1; do
-    sleep 1
-done
-echo "  ✓ API + frontend ready at http://localhost"
-
-# Pipeline
-echo "  → Starting pipeline"
-"$SCRIPT_DIR/.venv/bin/python" "$SCRIPT_DIR/run_pipeline.py" \
-    > "$SCRIPT_DIR/logs/pipeline.log" 2>&1 &
-echo $! > "$SCRIPT_DIR/.pids/pipeline.pid"
-echo "    PID: $(cat $SCRIPT_DIR/.pids/pipeline.pid)"
-
-echo ""
-echo "================================================"
-echo "  All services running"
-echo "================================================"
-echo "  App:      http://localhost"
-echo "  API docs: http://localhost/docs"
-echo "  Health:   http://localhost/health"
-echo ""
-echo "  tail -f logs/pipeline_debug.log"
-echo "  Stop:     ./stop.sh"
-echo "================================================"
-echo ""
-
-cleanup() {
-    echo ""
-    echo "Stopping services..."
-    kill $(cat "$SCRIPT_DIR/.pids/api.pid")      2>/dev/null && echo "  ✓ API stopped"
-    kill $(cat "$SCRIPT_DIR/.pids/pipeline.pid") 2>/dev/null && echo "  ✓ Pipeline stopped"
-    rm -f "$SCRIPT_DIR/.pids/"*.pid
-    exit 0
-}
-trap cleanup SIGINT SIGTERM
-
-tail -f "$SCRIPT_DIR/logs/api.log" \
-        "$SCRIPT_DIR/logs/pipeline.log" &
-wait

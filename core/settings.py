@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     pulse_api_host: str = "127.0.0.1"
     pulse_api_port: int = 7710
     pulse_root_path: str = ""                   # e.g. "/pulse/api" behind the gateway
+    pulse_api_token: SecretStr | None = None    # set => every API route needs "Authorization: Bearer <token>"
     pulse_admin_token: SecretStr | None = None  # unset => /admin is disabled (404)
     pulse_cors_origins: str = ""                # comma-separated; empty => same-origin only
     pulse_docs_enabled: bool = False            # /docs and /openapi.json
