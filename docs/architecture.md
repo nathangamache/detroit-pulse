@@ -96,6 +96,12 @@ queued ──transcribe──▶ transcribed ──extract──▶ done
   `mechanical`, `crossing_incident`, `trespasser`, `switching_yard`, `unknown` (Claude,
   or keyword rules when degraded); mapped to the gateway's enum in the API.
 * `config/rail_channels(.local).yaml` + `scripts/import_fcc_uls.py` (FCC ULS public data).
+  Subdivisions and channels carry `aliases` (the same track's names in other datasets, e.g.
+  FRA vs NARN) so a lookup by either name finds the line.
+* Receivers (`core/receivers.py`): rtl_airband's stats file and traintap's heartbeat, written
+  even while the channels are silent, give every feed a `receiver.state` (`not_installed` /
+  `offline` / `online`) in `/v1/feeds/status`, so "no transcripts" can be read as "quiet" only
+  when a receiver is actually listening ([sdr-ingest.md](sdr-ingest.md#6-receiver-heartbeats)).
 
 ## Data model
 

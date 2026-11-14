@@ -11,10 +11,27 @@
 #   freq_mhz    fallback match when rtl_airband `include_freq = true` (scan mode)
 #
 # kind: police | fire | ems | public_safety | rail_road | rail_dispatcher | rail_yard |
-#       rail_detector | eot | other
+#       rail_detector | rail_voice | eot | other
+#       (rail_voice = a railroad voice frequency whose use isn't confirmed on air yet)
 # unit_prefix  namespaces unit IDs across agencies in correlation (e.g. "AAFD:Engine 5")
 # bias         geocoder bias point; else the area's center, else areas.default_bias
+#              (eot: the receiver's location; /v1/rail/activity shows telemetry within 25 km)
 # vocab        extra whisper hints for this channel (public street/place names)
+#
+# For /v1/feeds/status (docs/pulse-api.md#feeds_status):
+# receiver     the receiver that hears this channel; its heartbeat is
+#              RECEIVER_STATUS_DIR/<name>.prom or <name>.heartbeat (docs/sdr-ingest.md#6-receiver-heartbeats).
+#              Default: rail-airband for rail_* voice kinds, traintap-eot for eot, none otherwise.
+# coverage     what it hears: {area, radius_km, lines: [{railroad, name, aliases: [...]}]}; aliases
+#              are the same track's names in other datasets (FRA vs NARN). Default: from the rail plan.
+# example      true for a placeholder (as is any id starting "example_"): reported with
+#              "example": true and never counted in coverage_summary.
+#
+# receivers:   optional top-level map, receiver name -> {device: "<description>"}, e.g.
+#   receivers: {rail-airband: {device: "rail-airband: RTL-SDR serial RAIL160 (rtl_airband)"}}
+#
+# The example_* channels below are placeholders. eot_hot is real and generic (the EOT/HOT
+# frequencies are a national standard); give it a `bias` point in channels.local.yaml.
 
 channels:
   - id: example_fire_dispatch

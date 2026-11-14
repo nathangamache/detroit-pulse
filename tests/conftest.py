@@ -31,6 +31,10 @@ _NO_INDEX = Path(tempfile.mkdtemp(prefix="pulse-test-geocoder-"))
 os.environ["GEOCODER_DATA_DIR"] = str(_NO_INDEX)
 os.environ["GEOCODER_LOCAL_INDEX"] = str(_NO_INDEX / "index")
 os.environ["LOG_LEVEL"] = "WARNING"
+# receiver heartbeats (core/receivers.py): an empty directory, never a developer's data/receivers
+_NO_RECEIVERS = Path(tempfile.mkdtemp(prefix="pulse-test-receivers-"))
+os.environ["RECEIVER_STATUS_DIR"] = str(_NO_RECEIVERS / "receivers")
+os.environ["TRAINTAP_CSV"] = str(_NO_RECEIVERS / "traintap" / "trains.csv")
 # Tests read a pristine copy of the committed config (never a developer's *.local.* files).
 _SESSION_CFG = Path(tempfile.mkdtemp(prefix="pulse-test-config-")) / "config"
 shutil.copytree(REPO / "config", _SESSION_CFG, ignore=shutil.ignore_patterns("*.local.*"))

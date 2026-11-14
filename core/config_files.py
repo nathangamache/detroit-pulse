@@ -9,6 +9,7 @@ points, no RadioReference-derived frequencies.
 from __future__ import annotations
 
 import math
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -139,7 +140,54 @@ def default_bias() -> tuple[float, float]:
 
 # ── Channels (SDR inputs) ───────────────────────────────────────────────────
 
-RAIL_KINDS = {"rail_road", "rail_dispatcher", "rail_yard", "rail_detector", "eot"}
+# rail_voice: a railroad voice frequency whose use (road/dispatcher/yard) isn't confirmed on air yet
+RAIL_KINDS = {"rail_road", "rail_dispatcher", "rail_yard", "rail_detector", "rail_voice", "eot"}
+RAIL_VOICE_KINDS = RAIL_KINDS - {"eot"}
+
+# The receiver a channel is heard on, by kind, unless the channel names one (`receiver:`).
+# Its heartbeat is <RECEIVER_STATUS_DIR>/<name>.prom or <name>.heartbeat (core/receivers.py).
+DEFAULT_RECEIVER_BY_KIND = {**{k: "rail-airband" for k in RAIL_VOICE_KINDS}, "eot": "traintap-eot"}
+DEFAULT_RECEIVER_DEVICES = {
+    "rail-airband": "rail-airband: RTL-SDR serial RAIL160 (rtl_airband)",
+    "traintap-eot": "traintap-eot: RTL-SDR serial EOT457 (traintap)",
+}
+_RECEIVER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+
+
+def norm_line_name(name: str | None) -> str:
+    """Normalise a rail line name for matching across datasets (FRA's crossing inventory and NARN
+    can name the same track differently): "EXAMPLE (CSXT)", "Example Sub", "EXAMPLE SUBDIVISION"
+    -> "example"."""
+    s = re.sub(r"\([^)]*\)", " ", (name or "").lower())
+    s = re.sub(r"\b(?:subdivision|sub)\b\.?", " ", s)
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+
+@dataclass
+class RailLine:
+    """A track a channel hears, with every other name the same track has in other datasets."""
+    railroad: str
+    name: str
+    aliases: list[str] = field(default_factory=list)
+
+    def names(self) -> list[str]:
+        return [self.name, *self.aliases]
+
+    def to_public(self) -> dict:
+        return {"railroad": self.railroad, "name": self.name, "aliases": list(self.aliases)}
+
+
+def names_match(hint: str | None, names: list[str], exact: bool = False) -> bool:
+    """True when `hint` names one of `names` (normalised; substring unless exact)."""
+    h = norm_line_name(hint)
+    if not h:
+        return False
+    for n in names:
+        nn = norm_line_name(n)
+        if nn and (h == nn or (not exact and h in nn)):
+            return True
+    return False
 
 
 @dataclass
@@ -162,10 +210,24 @@ class Channel:
     bias_lat: float | None = None
     bias_lon: float | None = None
     vocab: list[str] = field(default_factory=list)
+    receiver: str | None = None           # receiver name; None => DEFAULT_RECEIVER_BY_KIND
+    example: bool = False                 # shipped placeholder (also any id starting "example_")
+    coverage_area: str | None = None      # `coverage:` block: what this channel hears
+    coverage_radius_km: float | None = None
+    coverage_lines: list[RailLine] | None = None   # None = not given (derived from the rail plan)
 
     @property
     def is_rail(self) -> bool:
         return self.kind in RAIL_KINDS
+
+    @property
+    def is_example(self) -> bool:
+        """Shipped example/placeholder feeds never count as coverage."""
+        return self.example or self.id.startswith("example_")
+
+    @property
+    def receiver_name(self) -> str | None:
+        return self.receiver or DEFAULT_RECEIVER_BY_KIND.get(self.kind)
 
     def to_public(self) -> dict:
         return {"id": self.id, "label": self.label, "kind": self.kind, "freq_mhz": self.freq_mhz,
@@ -180,6 +242,15 @@ def _channel_from(d: dict) -> Channel:
         # YAML 1.1 turns bare on/off/yes/no into booleans; template names must be quoted
         raise ValueError(f"channel {d.get('id')}: quote template names like on/off/yes/no")
     bias = d.get("bias") or {}
+    receiver = d.get("receiver")
+    if receiver is not None and not (isinstance(receiver, str) and _RECEIVER_NAME.fullmatch(receiver)):
+        raise ValueError(f"channel {d.get('id')}: receiver must match [A-Za-z0-9][A-Za-z0-9_.-]*")
+    cov = d.get("coverage") or {}
+    lines = None
+    if cov.get("lines") is not None:
+        lines = [RailLine(railroad=str(ln.get("railroad") or d.get("railroad") or ""), name=str(ln["name"]),
+                          aliases=[str(a) for a in ln.get("aliases") or []])
+                 for ln in cov["lines"] if ln and ln.get("name")]
     return Channel(
         id=str(d["id"]), label=str(d.get("label", d["id"])), kind=str(d.get("kind", "public_safety")),
         freq_mhz=float(d["freq_mhz"]) if d.get("freq_mhz") is not None else None,
@@ -191,12 +262,25 @@ def _channel_from(d: dict) -> Channel:
         bias_lat=float(bias["lat"]) if bias.get("lat") is not None else None,
         bias_lon=float(bias["lon"]) if bias.get("lon") is not None else None,
         vocab=[str(v) for v in d.get("vocab", []) or []],
+        receiver=receiver, example=bool(d.get("example", False)),
+        coverage_area=str(cov["area"]) if cov.get("area") else None,
+        coverage_radius_km=float(cov["radius_km"]) if cov.get("radius_km") is not None else None,
+        coverage_lines=lines,
     )
 
 
 def load_channels(include_disabled: bool = True) -> list[Channel]:
     chans = [_channel_from(c) for c in (load_yaml("channels").get("channels") or [])]
     return chans if include_disabled else [c for c in chans if c.enabled]
+
+
+def load_receiver_devices() -> dict[str, str]:
+    """Receiver name -> device description: the defaults plus `receivers:` in channels(.local).yaml."""
+    out = dict(DEFAULT_RECEIVER_DEVICES)
+    for name, r in (load_yaml("channels").get("receivers") or {}).items():
+        if (r or {}).get("device"):
+            out[str(name)] = str(r["device"])
+    return out
 
 
 def channel_by_id(channel_id: str) -> Channel | None:
@@ -247,6 +331,13 @@ class Subdivision:
     center: tuple[float, float] | None = None
     radius_km: float = 15.0
     channels: list[RailChannel] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)   # the same track's names in other datasets
+
+    def names(self) -> list[str]:
+        return [self.name, *self.aliases]
+
+    def matches(self, hint: str | None, exact: bool = False) -> bool:
+        return names_match(hint, self.names(), exact=exact)
 
     def near(self, lat: float, lon: float) -> bool:
         if self.bbox and self.bbox.contains(lat, lon):
@@ -268,6 +359,7 @@ def load_subdivisions() -> list[Subdivision]:
                 bbox=BBox.from_any(sub.get("bbox")),
                 center=(float(center["lat"]), float(center["lon"])) if center else None,
                 radius_km=float(sub.get("radius_km", 15.0)),
+                aliases=[str(a) for a in sub.get("aliases") or []],
             )
             for ch in sub.get("channels") or []:
                 sd.channels.append(RailChannel(

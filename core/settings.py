@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     traintap_csv: Path = REPO_DIR / "data" / "traintap" / "trains.csv"
     traintap_channel: str = "eot_hot"
     fixture_dir: Path = REPO_DIR / "tests" / "fixtures"
+    # Receiver heartbeats (core/receivers.py): <name>.prom (rtl_airband stats_filepath) or
+    # <name>.heartbeat (traintap --heartbeat). Older than receiver_stale_s => the receiver is offline.
+    receiver_status_dir: Path = REPO_DIR / "data" / "receivers"
+    receiver_stale_s: float = 300.0
     broadcastify_legacy_enabled: bool = False   # see ingest/sources/broadcastify_legacy.py (ToS)
     broadcastify_tos_acknowledged: bool = False
 

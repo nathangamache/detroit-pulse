@@ -4,11 +4,14 @@
     uv run python scripts/render_rail_conf.py                 # -> deploy/sdr/rail.local.conf (gitignored)
     uv run python scripts/render_rail_conf.py --check         # print what would be included
 
-Takes every enabled rail_road / rail_dispatcher / rail_yard / rail_detector channel with a freq_mhz
+Takes every enabled rail_road / rail_dispatcher / rail_yard / rail_detector / rail_voice channel with a freq_mhz
 inside the dongle's usable band (centre +- (sample_rate/2 - 0.08) MHz; 160.8975 MHz at 2.56 MS/s by
 default, read from the template) and writes one NFM channel per frequency with a file output into
 /recordings. Channels sharing a frequency (a detector on the road channel) are written once, with
-the first channel's template. Frequencies never go into the committed template.
+the first channel's template. Frequencies never go into the committed template. The template's
+global `stats_filepath` (rtl_airband's stats file, Pulse's receiver heartbeat) is kept as is; each
+channel's `label` is its Pulse channel id, which is how /v1/feeds/status tells which feeds the
+running receiver actually demodulates.
 """
 from __future__ import annotations
 
@@ -19,7 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-VOICE_RAIL = {"rail_road", "rail_dispatcher", "rail_yard", "rail_detector"}
+VOICE_RAIL = {"rail_road", "rail_dispatcher", "rail_yard", "rail_detector", "rail_voice"}
 MARKER = "# @CHANNELS@"
 
 BLOCK = """      {{

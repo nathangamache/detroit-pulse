@@ -30,8 +30,9 @@ ENV PATH=/opt/venv/bin:$PATH \
 RUN groupadd --gid 10010 pulse \
  && groupadd --gid 10030 pulse-sdr \
  && useradd --uid 10010 --gid 10010 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin pulse \
- && mkdir -p /data/sdr /data/traintap /models /geocoder/index /fixtures \
- && chown 10010:10030 /data/sdr /data/traintap && chmod 2775 /data/sdr /data/traintap \
+ && mkdir -p /data/sdr /data/traintap /data/receivers /models /geocoder/index /fixtures \
+ && chown 10010:10030 /data/sdr /data/traintap /data/receivers \
+ && chmod 2775 /data/sdr /data/traintap /data/receivers \
  && chown 10010:10010 /models \
  && rm -rf /usr/local/lib/python3.12/site-packages/pip /usr/local/bin/pip /usr/local/bin/pip3*
 COPY --from=build /opt/venv /opt/venv

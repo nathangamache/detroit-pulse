@@ -7,7 +7,9 @@ columns (traintap/output.py CSV_COLUMNS):
     batt_charge_pct, batt_cond, message_type, arm_status, motion, marker_light,
     turbine, valve_ckt, data_block, checkbits_rx
 
-and touches `heartbeat` next to the CSV about once a minute. If a run starts with
+and touches a heartbeat file about once a minute (`heartbeat` next to the CSV, or
+`--heartbeat FILE`; the container stack writes RECEIVER_STATUS_DIR/traintap-eot.heartbeat,
+which /v1/feeds/status reads, see core/receivers.py). If a run starts with
 a different header, traintap renames the old file to trains.csv.N and starts a
 new one; we follow the path (inode change => read from the top).
 
@@ -91,11 +93,15 @@ class TraintapSource(Source):
         self.last_packet: datetime | None = None
 
     def heartbeat_age_s(self) -> float | None:
-        hb = self.path.parent / "heartbeat"
-        try:
-            return datetime.now(timezone.utc).timestamp() - hb.stat().st_mtime
-        except OSError:
-            return None
+        """Age of traintap's heartbeat: RECEIVER_STATUS_DIR/traintap-eot.heartbeat (the container
+        stack's `--heartbeat`) or `heartbeat` next to the CSV (traintap's default)."""
+        now, ages = datetime.now(timezone.utc).timestamp(), []
+        for hb in (get_settings().receiver_status_dir / "traintap-eot.heartbeat", self.path.parent / "heartbeat"):
+            try:
+                ages.append(now - hb.stat().st_mtime)
+            except OSError:
+                pass
+        return min(ages) if ages else None
 
     def poll_once(self) -> int:
         try:

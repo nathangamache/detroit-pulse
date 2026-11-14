@@ -196,6 +196,13 @@ or volume is missing). Notes:
 
 * The gateway's proxy treats `Upgrade` as hop-by-hop, so the UI's WebSocket (`/pulse/api/ws`)
   won't connect through it; the UI falls back to polling the REST API.
+* `GET /v1/feeds/status` carries, per feed, `receiver` (`not_installed` / `offline` / `online`),
+  `coverage` (area, radius, rail lines with their FRA/NARN aliases) and `example`, plus a top-level
+  `coverage_summary` per source (`no_receiver` / `receiver_offline` / `listening` /
+  `not_configured`), so the gateway can say "no receiver yet" instead of "quiet"
+  ([pulse-api.md](pulse-api.md#feeds_status)). The fields are additive: the gateway treats their
+  absence (an older Pulse) as unknown. `/v1/rail/activity` reports `covered: false` until a
+  receiver has reported for one of the line's channels.
 * UI files are world-readable (644/755) and owned by uid 10010, so the gateway's uid 10001 can
   read them through the read-only mount.
 
@@ -205,8 +212,19 @@ Profile `sdr`, off by default (no hardware yet). Two RTL-SDR Blog V3 dongles:
 
 | service | image | dongle | output |
 |---|---|---|---|
-| `rail-airband` | `ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1@sha256:e6da…` | serial `RAIL160`, 2.56 MS/s at 160.8975 MHz (`deploy/sdr/rail.conf`) | one MP3 per transmission into `pulse_sdr` (Pulse's `sdr_files` source) |
-| `traintap-eot` | `ghcr.io/trickv/traintap:sha-984af85@sha256:fbfb…` | serial `EOT457`, EOT 457.9375 MHz + DPU | `trains.csv`, `passes.csv`, `signal.csv` + heartbeat into `pulse_traintap` |
+| `rail-airband` | `ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1@sha256:e6da…` | serial `RAIL160`, 2.56 MS/s at 160.8975 MHz (`deploy/sdr/rail.conf`) | one MP3 per transmission into `pulse_sdr` (Pulse's `sdr_files` source); stats file `rail-airband.prom` every 15 s into `pulse_receivers` |
+| `traintap-eot` | `ghcr.io/trickv/traintap:sha-984af85@sha256:fbfb…` | serial `EOT457`, EOT 457.9375 MHz + DPU | `trains.csv`, `passes.csv`, `signal.csv` into `pulse_traintap`; `traintap-eot.heartbeat` (about once a minute) into `pulse_receivers` |
+
+**Receiver heartbeats.** The two heartbeat files are how `/v1/feeds/status` tells "receiver
+online, channel quiet" from "no receiver" (`receiver.state`, `coverage_summary`; see
+[pulse-api.md](pulse-api.md#feeds_status) and [sdr-ingest.md](sdr-ingest.md#6-receiver-heartbeats)).
+They go into their own small volume, `pulse_receivers`: the SDR containers mount it at `/status`
+(rtl_airband's global `stats_filepath`, traintap's `--heartbeat`), and `pulse-api` mounts it
+read-only at `/data/receivers` (`RECEIVER_STATUS_DIR`), so the API container never sees the
+recordings. Nothing gains a network or a port: the SDR containers stay `network_mode: none`. The
+empty volume takes its owner and mode (`pulse:pulse-sdr`, `2775`) from the image's
+`/data/receivers` when `pulse-api` first mounts it (checked: this also happens for a read-only
+mount). Until the `sdr` profile runs, no file exists and every feed is `not_installed`.
 
 Both run as non-root users in group 10030 (`pulse-sdr`, shared with `pulse-transcribe`), with
 `network_mode: none`, read-only roots, all capabilities dropped, `device_cgroup_rules: ['c 189:* rmw']`
@@ -233,6 +251,21 @@ Then:
 uv run python scripts/render_rail_conf.py      # fills deploy/sdr/rail.local.conf from config/channels.local.yaml
 docker-compose -p pulse --profile sdr up -d rail-airband traintap-eot
 ```
+
+and check that the receivers report (details and troubleshooting:
+[sdr-ingest.md §7](sdr-ingest.md#7-from-not_installed-to-listening)):
+
+```bash
+docker run --rm --network none -v pulse_receivers:/v:ro --entrypoint ls detroit-pulse:0.2.0 -lan --time-style=+%T /v
+#   .  10010 10030 drwxrwsr-x;  rail-airband.prom (fresh every 15 s);  traintap-eot.heartbeat (every ~60 s)
+# GET /v1/feeds/status: receiver.state "online" for the rail and eot feeds, and
+# coverage_summary {"rail_radio": "listening", "eot": "listening", ...} even with no traffic yet
+```
+
+The `pulse_receivers` mount on `pulse-api` came with the receiver heartbeat change (2026-11-14):
+after pulling it, rebuild `detroit-pulse:0.2.0` (the image creates `/data/receivers`) and run
+`docker-compose -p pulse up -d`, which recreates `pulse-api` (and the workers, whose image changed)
+and creates the volume.
 
 `deploy/sdr/rail.conf` (committed) has an **empty channel list**, so no frequencies are in the
 public repo; each rendered channel uses `split_on_transmission`, `include_freq`,

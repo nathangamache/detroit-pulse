@@ -44,13 +44,24 @@ close, else the latest per-transmission short summary.
 ### `rail_activity_near`
 
 1. Subdivisions are taken from `config/rail_channels(.local).yaml`: those whose center+radius
-   or bbox contains the point, plus any whose name contains the `subdivision` hint; the
-   `railroad` hint narrows them.
+   or bbox contains the point, plus any whose name **or alias** contains the `subdivision`
+   hint; the `railroad` hint narrows them. Names are compared normalised (case, punctuation,
+   a trailing "(CSXT)" owner tag and the word "Sub"/"Subdivision" ignored), so the gateway's
+   NARN-based hint finds a line that FRA names differently when the alias is configured.
 2. Monitored voice channels are the ones linked from those subdivisions (`channel_id`) or
-   whose `railroad`/`subdivision` in `config/channels(.local).yaml` match. EOT/HOT
-   telemetry is included when an `eot` channel exists and either has no `bias` point or is
-   within 25 km.
-3. `coverage.covered` is false (with a `note`) when no voice channel covers the line yet.
+   whose `subdivision` or `coverage.lines` names in `config/channels(.local).yaml` match one
+   of the subdivision's names (railroad permitting). EOT/HOT telemetry is included when an
+   `eot` channel exists and either has no `bias` point or is within 25 km.
+3. Each `coverage.channels[]` entry has an extra `receiver_state` (`not_installed` /
+   `offline` / `online`, as in `feeds_status` below). `coverage.covered` is true only when a
+   receiver has reported for at least one enabled, non-example matched channel (state
+   `online` or `offline`): a configured channel with no receiver is not coverage. `note`
+   says which case applies: no voice channel for the line ("No monitored rail voice
+   channel ..."), configured but no receiver ever reported (no transcripts means no
+   coverage, not a quiet line), receiver offline (with the last time it was heard), or
+   receiver online with nothing heard (the channels were quiet); the same for EOT/HOT, and
+   "EOT/HOT receiver location not configured" when the eot channel has no `bias`.
+   Detector readouts also match the subdivision's aliases.
 4. `transcripts`: rail traffic on those channels, newest first, each with `reason_label`.
 5. `detector_readouts` from `rail_detector_events`; `defects` lists alarm types (`[]` = no
    defects; `["integrity_failure"]` when the detector reported a failure).
@@ -84,6 +95,59 @@ healthy, so treat `down` as "silent"); the `eot` channel uses traintap's heartbe
 (`up` < 3 min, `degraded` < 15 min). `source` is `sdr:rtl_airband`, `sdr:trunk-recorder` or
 `sdr:traintap`. Additions: per-feed `backlog`, and a top-level `backlog` with queue counts
 by status and `oldest_waiting_s`.
+
+**Receivers and coverage** (shared with the gateway; additive, so an older gateway ignores
+them, and a gateway talking to an older Pulse treats their absence as "unknown"). `state`
+alone can't tell "nothing was said" from "nothing was listening"; these fields can:
+
+```ts
+feeds[]: {
+  ...                                    // every field above, unchanged
+  example: boolean;                      // shipped placeholder: id "example_*" or `example: true`
+  receiver: {
+    state: "not_installed" | "offline" | "online";
+    last_seen_at?: string;               // ISO 8601 UTC: newest heartbeat or receiver output
+    device?: string;                     // e.g. "rail-airband: RTL-SDR serial RAIL160 (rtl_airband)"
+  };
+  coverage: {                            // from config; every key optional, {} = unknown
+    area?: string;
+    lines?: { railroad: string; name: string; aliases: string[] }[];   // rail: what it hears
+    radius_km?: number;
+  };
+}
+coverage_summary: {                      // top level
+  rail_radio: S; eot: S; public_safety: S;
+}   // S = "no_receiver" | "receiver_offline" | "listening" | "not_configured"
+```
+
+* `receiver.state`, per feed. Each feed has a receiver: `receiver:` on the channel, else by
+  kind (`rail_*` voice channels: `rail-airband`; `eot`: `traintap-eot`; others: none).
+  Evidence is that receiver's heartbeat file (see [sdr-ingest.md](sdr-ingest.md#6-receiver-heartbeats))
+  and the feed's own output: recordings ingested by `sdr_files` (7 days) or traintap packets.
+  Fixture replays and legacy imports are not evidence.
+  * `not_installed`: no receiver has ever reported for this feed (no heartbeat file, no output).
+    This is the state of every feed until the SDR hardware is plugged in and the `sdr` profile runs.
+  * `offline`: the newest evidence is older than `RECEIVER_STALE_S` (default 300 s).
+  * `online`: fresher than that. **A fresh heartbeat with 0 chunks means the channel is
+    quiet, not uncovered.**
+  * rtl_airband's heartbeat names the channels it demodulates; a feed it doesn't list (e.g.
+    `rail.local.conf` wasn't re-rendered after adding it) gets no heartbeat from it and stays
+    `not_installed` / `offline`.
+* `coverage`: the channel's `coverage:` block (`area`, `radius_km`, `lines` with `aliases`:
+  every other name the same track has in other datasets, e.g. FRA vs NARN). Without one,
+  `lines` come from the rail plan (subdivisions linked to the channel, with their `aliases`)
+  and `area`/`radius_km` from the channel's `area_id` (else `area` = its `city`).
+* `example: true` for the shipped placeholder feeds in the committed `config/channels.yaml`
+  (ids starting `example_`, or `example: true`). They never count as coverage.
+* `coverage_summary`, per group (`rail_radio`: every `rail_*` voice kind; `eot`;
+  `public_safety`: everything else), over **enabled, non-example, configured** feeds
+  (unmapped ones don't count): `listening` if any receiver is online, else
+  `receiver_offline` if any is offline, else `no_receiver`; `not_configured` when the group
+  has no such feed (or only examples).
+
+With only the committed config (no `channels.local.yaml`) the summary is
+`{"rail_radio": "not_configured", "eot": "no_receiver", "public_safety": "not_configured"}`:
+the generic `eot_hot` feed is real (EOT frequencies are standard), the rest are examples.
 
 ## UI routes
 

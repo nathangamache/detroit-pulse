@@ -104,9 +104,34 @@ def test_setup_pins_and_checks_godseye_backend():
     assert not re.search(r"^\s*(chmod|chown|setfacl)\b.*FEWSHOTS", text, re.M)
 
 
+def test_receiver_heartbeats_reach_the_api_read_only_without_network():
+    """rtl_airband's stats file and traintap's heartbeat land in pulse_receivers, which pulse-api
+    reads (core/receivers.py). Nothing gains a network or a port."""
+    c = _compose()
+    svcs = c["services"]
+    assert c["volumes"]["pulse_receivers"] == {"name": "pulse_receivers"}
+    api_env = svcs["pulse-api"]["environment"]
+    assert "pulse_receivers:/data/receivers:ro" in svcs["pulse-api"]["volumes"]
+    assert api_env["RECEIVER_STATUS_DIR"] == "/data/receivers"
+    assert "pulse_receivers:/status" in svcs["rail-airband"]["volumes"]
+    assert "pulse_receivers:/status" in svcs["traintap-eot"]["volumes"]
+    cmd = svcs["traintap-eot"]["command"]
+    assert cmd[cmd.index("--heartbeat") + 1] == "/status/traintap-eot.heartbeat"
+    assert 'stats_filepath = "/status/rail-airband.prom";' in (REPO / "deploy" / "sdr" / "rail.conf").read_text()
+    # only pulse-api (read-only) and the two SDR writers mount it; the SDR side stays offline
+    users = {n for n, s in svcs.items() if any(str(v).startswith("pulse_receivers:") for v in s.get("volumes", []))}
+    assert users == {"pulse-api", "rail-airband", "traintap-eot"}
+    for sdr in ("rail-airband", "traintap-eot"):
+        assert svcs[sdr]["network_mode"] == "none" and not svcs[sdr].get("ports")
+    # the image creates the mount point the volume copies its owner/mode from
+    docker = (REPO / "deploy" / "docker" / "Dockerfile").read_text()
+    assert "/data/receivers" in docker and "chmod 2775 /data/sdr /data/traintap /data/receivers" in docker
+
+
 def test_sample_rail_conf_has_no_channels_and_required_settings():
     text = (REPO / "deploy" / "sdr" / "rail.conf").read_text()
-    for needle in ('serial = "RAIL160"', "centerfreq = 160.8975", "sample_rate = 2.56", R.MARKER):
+    for needle in ('serial = "RAIL160"', "centerfreq = 160.8975", "sample_rate = 2.56", R.MARKER,
+                   'stats_filepath = "/status/rail-airband.prom";'):
         assert needle in text
     import re
     body = text.split("# Channel block")[0]
@@ -122,12 +147,15 @@ def test_render_rail_conf_selects_in_band_rail_channels():
         Channel(id="far", label="c", kind="rail_road", freq_mhz=452.9),
         Channel(id="fire", label="f", kind="fire", freq_mhz=160.5),
         Channel(id="off", label="o", kind="rail_yard", freq_mhz=160.9, enabled=False),
+        Channel(id="cand", label="v", kind="rail_voice", freq_mhz=160.65, templates=["cand_t"]),
     ]
     out, used, skipped = R.render(template, chans)
-    assert [u.split(":")[0] for u in used] == ["road_a", "disp"]
+    assert [u.split(":")[0] for u in used] == ["road_a", "disp", "cand"]
     assert any(s.startswith("det_a") for s in skipped) and any(s.startswith("far") for s in skipped)
-    assert out.count("split_on_transmission = true;") == 3      # 2 channels + the documented example
+    assert out.count("split_on_transmission = true;") == 4      # 3 channels + the documented example
     assert 'filename_template = "disp"' in out and "freq = 161.2500;" in out
+    assert 'label = "cand";' in out                             # label = channel id: the heartbeat's channel list
+    assert out.count('stats_filepath = "/status/rail-airband.prom";') == 1
     assert R.MARKER not in out.split("# Channel block")[0]
     empty, used0, _ = R.render(template, [])
     assert not used0 and R.MARKER in empty

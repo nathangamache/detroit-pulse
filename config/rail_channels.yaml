@@ -13,13 +13,15 @@
 #   <RAILROAD CODE: CSX | NS | CN | CSAO | AMTK | CPKC ...>:
 #     subdivisions:
 #       <Subdivision name>:
+#         aliases: ["<OTHER NAME (CSXT)>"]            # optional: the same track's names in other
+#                                                     # datasets (FRA vs NARN); hints match these too
 #         bbox: {south: , west: , north: , east: }    # optional; or center + radius_km
 #         center: {lat: , lon: }
 #         radius_km: 15
 #         channels:
 #           - freq_mhz: 160.xxx          # 160.110-161.565 railroad pool (AAR channels 00-97)
 #             aar_channel: "07"          # (freq - 160.110) / 0.015
-#             use: road                  # road | dispatcher | yard | detector
+#             use: road                  # road | dispatcher | yard | detector | unknown (not heard yet)
 #             verified: false            # true only after you have heard it yourself
 #             source: "FCC ULS <call sign> <site>"   # provenance of the entry
 #             channel_id: example_rail_road           # optional link to config/channels.yaml

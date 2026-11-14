@@ -130,8 +130,10 @@ def test_rail_activity(seeded):
     rl = {x["label"]: x for x in r["reason_labels"]}
     assert {"emergency", "signal_stop", "meet_pass", "defect_detector_stop"} <= set(rl)
     assert all(0 <= x["confidence"] <= 1 for x in r["reason_labels"])
+    assert {c["receiver_state"] for c in r["coverage"]["channels"]} == {"online"}   # recordings / packets just now
     far = seeded.get("/v1/rail/activity", params={"lat": 42.9, "lon": -83.0}).json()
-    assert far["coverage"]["channels"] == [{"channel": "EOT/HOT telemetry", "frequency_mhz": 457.9375, "kind": "eot"}]
+    assert far["coverage"]["channels"] == [{"channel": "EOT/HOT telemetry", "frequency_mhz": 457.9375, "kind": "eot",
+                                            "receiver_state": "online"}]
     assert "No monitored rail voice channel" in far["coverage"]["note"]
     hinted = seeded.get("/v1/rail/activity", params={"lat": 42.9, "lon": -83.0, "subdivision": "test"}).json()
     assert hinted["subdivision"] == "Test Sub"
@@ -147,6 +149,109 @@ def test_feeds_status(seeded):
     assert feeds["csx_road"]["category"] == "rail"
     assert feeds["eot_hot"]["source"] == "sdr:traintap" and feeds["eot_hot"]["state"] == "down"   # no heartbeat file
     assert r["backlog"]["queued"] == 1 and r["backlog"]["oldest_waiting_s"] >= 0
+    # receiver: recordings / packets in the last minutes prove a receiver even without a heartbeat file
+    assert feeds["aa_fire"]["receiver"]["state"] == "online" and "device" not in feeds["aa_fire"]["receiver"]
+    assert feeds["csx_road"]["receiver"]["state"] == "online"
+    assert feeds["csx_road"]["receiver"]["device"].startswith("rail-airband")
+    assert feeds["eot_hot"]["receiver"]["state"] == "online" and feeds["eot_hot"]["receiver"]["last_seen_at"].endswith("Z")
+    assert feeds["csx_road"]["coverage"] == {"lines": [{"railroad": "CSX", "name": "Test Sub", "aliases": []}]}
+    assert feeds["aa_fire"]["coverage"] == {"area": "Ann Arbor"} and feeds["eot_hot"]["coverage"] == {}
+    assert not any(f["example"] for f in r["feeds"])
+    assert r["coverage_summary"] == {"rail_radio": "listening", "eot": "listening", "public_safety": "listening"}
+
+
+QUIET = {"channels": [
+    {"id": "csx_road", "label": "CSX Test Sub road", "kind": "rail_voice", "railroad": "CSX",
+     "subdivision": "Test Sub", "freq_mhz": 160.215,
+     "coverage": {"area": "Test area", "radius_km": 5,
+                  "lines": [{"name": "Test Sub", "aliases": ["TESTNAME (CSXT)", "Other Sub"]}]}},
+    {"id": "csx_yard", "label": "CSX Test yard", "kind": "rail_yard", "railroad": "CSX", "subdivision": "Test Sub",
+     "freq_mhz": 160.95},
+    {"id": "example_fire_dispatch", "label": "Example fire", "kind": "fire"},
+    {"id": "eot_hot", "label": "EOT/HOT telemetry", "kind": "eot", "freq_mhz": 457.9375,
+     "bias": {"lat": 42.25, "lon": -83.70}},
+]}
+QUIET_RAIL = {"railroads": {"CSX": {"subdivisions": {"Test Sub": {
+    "aliases": ["TESTNAME"], "center": {"lat": 42.25, "lon": -83.70}, "radius_km": 8}}}}}
+
+
+@pytest.fixture()
+def quiet(db, cfg_dir, tmp_path, monkeypatch):
+    """Configured rail channels, an empty database, and a receiver status dir the test fills."""
+    from core.settings import reset_settings_cache
+    (cfg_dir / "channels.local.yaml").write_text(yaml.safe_dump(QUIET))
+    (cfg_dir / "rail_channels.local.yaml").write_text(yaml.safe_dump(QUIET_RAIL))
+    status = tmp_path / "receivers"
+    status.mkdir()
+    monkeypatch.setenv("RECEIVER_STATUS_DIR", str(status))
+    monkeypatch.setenv("TRAINTAP_CSV", str(tmp_path / "traintap" / "trains.csv"))
+    reset_settings_cache()
+    from api.main import create_app
+    return TestClient(create_app()), status
+
+
+def test_no_receiver_is_not_a_quiet_channel(quiet):
+    client, _status = quiet
+    r = client.get("/v1/feeds/status").json()
+    feeds = {f["feed_id"]: f for f in r["feeds"]}
+    assert feeds["csx_road"]["receiver"] == {"state": "not_installed",
+                                             "device": "rail-airband: RTL-SDR serial RAIL160 (rtl_airband)"}
+    assert feeds["csx_road"]["coverage"] == {"area": "Test area", "radius_km": 5.0, "lines": [
+        {"railroad": "CSX", "name": "Test Sub", "aliases": ["TESTNAME (CSXT)", "Other Sub"]}]}
+    assert feeds["example_fire_dispatch"]["example"] is True and feeds["csx_road"]["example"] is False
+    assert feeds["eot_hot"]["receiver"]["state"] == "not_installed"
+    # the example fire feed doesn't count: public safety is not configured at all
+    assert r["coverage_summary"] == {"rail_radio": "no_receiver", "eot": "no_receiver", "public_safety": "not_configured"}
+    a = client.get("/v1/rail/activity", params={"lat": 42.26, "lon": -83.71}).json()
+    assert a["coverage"]["covered"] is False and a["transcripts"] == []
+    assert {c["receiver_state"] for c in a["coverage"]["channels"]} == {"not_installed"}
+    assert "no receiver has ever reported" in a["coverage"]["note"] and "not a quiet line" in a["coverage"]["note"]
+    assert "No EOT/HOT receiver has reported yet" in a["coverage"]["note"]
+
+
+def test_fresh_heartbeat_with_no_traffic_is_quiet(quiet):
+    import os
+    import time
+    client, status = quiet
+    (status / "rail-airband.prom").write_text(
+        'channel_activity_counter{freq="160.215",label="csx_road"}\t0\n')
+    (status / "traintap-eot.heartbeat").write_text("")
+    r = client.get("/v1/feeds/status").json()
+    feeds = {f["feed_id"]: f for f in r["feeds"]}
+    assert feeds["csx_road"]["receiver"]["state"] == "online" and feeds["csx_road"]["chunks_last_hour"] == 0
+    assert feeds["csx_yard"]["receiver"]["state"] == "not_installed"        # not in rtl_airband's channel list
+    assert feeds["eot_hot"]["receiver"]["state"] == "online" and feeds["eot_hot"]["state"] == "up"
+    assert r["coverage_summary"] == {"rail_radio": "listening", "eot": "listening", "public_safety": "not_configured"}
+    a = client.get("/v1/rail/activity", params={"lat": 42.26, "lon": -83.71}).json()
+    assert a["coverage"]["covered"] is True and "they were quiet" in a["coverage"]["note"]
+    assert "location not configured" not in a["coverage"]["note"]          # eot has a bias point
+    # the same heartbeat 10 minutes later: the receiver went offline
+    old = time.time() - 600
+    for p in status.iterdir():
+        os.utime(p, (old, old))
+    r2 = client.get("/v1/feeds/status").json()
+    assert r2["coverage_summary"] == {"rail_radio": "receiver_offline", "eot": "receiver_offline",
+                                      "public_safety": "not_configured"}
+    a2 = client.get("/v1/rail/activity", params={"lat": 42.26, "lon": -83.71}).json()
+    assert a2["coverage"]["covered"] is True and "is offline (last heard" in a2["coverage"]["note"]
+
+
+def test_rail_hint_matches_other_dataset_names(quiet):
+    client, _ = quiet
+    for hint in ("TESTNAME (CSXT)", "testname", "Other Sub"):
+        r = client.get("/v1/rail/activity", params={"lat": 42.9, "lon": -83.0, "subdivision": hint}).json()
+        assert {c["channel"] for c in r["coverage"]["channels"]} >= {"CSX Test Sub road"}, hint
+    none = client.get("/v1/rail/activity", params={"lat": 42.9, "lon": -83.0, "subdivision": "Holly"}).json()
+    assert "No monitored rail voice channel" in none["coverage"]["note"]
+
+
+def test_feeds_status_with_shipped_config_reports_examples(db):
+    from api.main import create_app
+    r = TestClient(create_app()).get("/v1/feeds/status").json()
+    feeds = {f["feed_id"]: f for f in r["feeds"]}
+    assert feeds["example_rail_road"]["example"] is True and feeds["eot_hot"]["example"] is False
+    assert r["coverage_summary"] == {"rail_radio": "not_configured", "eot": "no_receiver",
+                                     "public_safety": "not_configured"}
 
 
 def test_ui_routes(seeded):

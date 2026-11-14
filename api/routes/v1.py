@@ -9,13 +9,15 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
-from core.config_files import RAIL_KINDS, Channel, haversine_km, load_channels, load_subdivisions
+from core.config_files import (RAIL_KINDS, RAIL_VOICE_KINDS, Channel, haversine_km, load_areas, load_channels,
+                               load_subdivisions, norm_line_name)
 from core.db import get_engine
+from core.receivers import (ReceiverView, channel_matches_hint, coverage_for, coverage_summary,
+                            on_subdivision)
 from core.settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -202,6 +204,17 @@ def search_transcripts(q: str = Query(...), since_minutes: int = Query(60), chan
     return {"generated_at": now_iso(), "query": q, "results": [transcript_out(dict(r), chans) for r in rows]}
 
 
+def _sub_names(subs: list) -> list[str]:
+    """Lower-cased names, aliases and their normalised forms, to match detector readouts."""
+    out: set[str] = set()
+    for sd in subs:
+        for n in sd.names():
+            out.add(n.lower())
+            if norm_line_name(n):
+                out.add(norm_line_name(n))
+    return sorted(out)
+
+
 def _contract_kind(ch: Channel) -> str:
     return {"rail_dispatcher": "dispatcher", "rail_detector": "detector", "eot": "eot"}.get(ch.kind, "road")
 
@@ -212,40 +225,38 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
     if not 1 <= since_minutes <= 720:
         raise _bad("since_minutes must be between 1 and 720")
     since = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
-    subs = [sd for sd in load_subdivisions() if sd.near(lat, lon)]
+    all_subs = load_subdivisions()
+    subs = [sd for sd in all_subs if sd.near(lat, lon)]
     if subdivision:
-        subs += [sd for sd in load_subdivisions() if subdivision.lower() in sd.name.lower() and sd not in subs]
+        # the hint may use another dataset's name for the track (NARN vs FRA): aliases count
+        subs += [sd for sd in all_subs if sd.matches(subdivision) and sd not in subs]
     if railroad:
         subs = [sd for sd in subs if sd.railroad.upper() == railroad.upper()] or subs
     chans = _channels()
     voice: dict[str, Channel] = {}
     for sd in subs:
         for rc in sd.channels:
-            if rc.channel_id and rc.channel_id in chans:
+            if rc.channel_id and rc.channel_id in chans and chans[rc.channel_id].kind != "eot":
                 voice[rc.channel_id] = chans[rc.channel_id]
         for c in chans.values():
-            if c.kind in RAIL_KINDS and c.kind != "eot" and c.subdivision and c.subdivision.lower() == sd.name.lower():
+            if c.kind in RAIL_VOICE_KINDS and on_subdivision(c, sd):
                 voice[c.id] = c
     if subdivision and not subs:
         for c in chans.values():
-            if c.kind in RAIL_KINDS and c.kind != "eot" and c.subdivision and subdivision.lower() in c.subdivision.lower():
+            if c.kind in RAIL_VOICE_KINDS and channel_matches_hint(c, subdivision):
                 voice[c.id] = c
     eot_chans = [c for c in chans.values() if c.kind == "eot" and c.enabled and
                  (c.bias_lat is None or haversine_km(c.bias_lat, c.bias_lon, lat, lon) <= 25)]
     sub_name = subs[0].name if subs else subdivision
     rr_name = subs[0].railroad if subs else railroad
-    coverage_channels = [{"channel": c.label, "frequency_mhz": c.freq_mhz, "railroad": c.railroad,
-                          "subdivision": c.subdivision, "kind": _contract_kind(c)}
-                         for c in list(voice.values()) + eot_chans]
-    coverage_channels = [{k: v for k, v in x.items() if v is not None} for x in coverage_channels]
-    note = None
-    if not voice:
-        note = ("No monitored rail voice channel for this location yet; add it to config/channels.local.yaml "
-                "and config/rail_channels.local.yaml once a receiver covers it.")
-    if eot_chans and any(c.bias_lat is None for c in eot_chans):
-        note = (note + " " if note else "") + "EOT/HOT receiver location not configured; telemetry shown unfiltered."
     ids = list(voice)
     with get_engine().connect() as c:
+        last_sdr = dict(c.execute(text("""
+            SELECT channel_id, max(coalesce(captured_at, "timestamp")) FROM transcript_chunks
+             WHERE channel_id = ANY(CAST(:ids AS text[])) AND source = 'sdr_files'
+               AND coalesce(captured_at, "timestamp") >= now() - interval '7 days'
+             GROUP BY 1"""), {"ids": ids}).all()) if ids else {}
+        eot_seen = c.execute(text("SELECT max(ts) FROM rail_telemetry")).scalar() if eot_chans else None
         tx = c.execute(text("""
             SELECT chunk_id, channel_id, feed_id, captured_at, "timestamp", raw_transcript, incident_id,
                    rail->>'reason_label' AS reason, priority, extract_source
@@ -260,7 +271,7 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
               FROM rail_detector_events
              WHERE ts >= :since AND (channel_id = ANY(CAST(:ids AS text[])) OR lower(subdivision) = ANY(CAST(:subs AS text[])))
              ORDER BY ts DESC LIMIT 100"""),
-                        {"since": since, "ids": ids, "subs": [s.name.lower() for s in subs]}).mappings().all()
+                        {"since": since, "ids": ids, "subs": _sub_names(subs)}).mappings().all()
         eot = c.execute(text("""
             SELECT ts, source, unit_id, brake_pipe_psig, motion, marker_light, batt_cond, arm_status, emergency, status
               FROM rail_telemetry WHERE ts >= :since AND source IN ('EOT', 'HOT')
@@ -306,12 +317,48 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
     total = sum(v["w"] for v in weights.values()) or 1.0
     reason_labels = sorted(({"label": k, "confidence": round(min(1.0, v["w"] / total), 2), "from_chunk_ids": v["ids"][:20]}
                             for k, v in weights.items()), key=lambda x: -x["confidence"])
+
+    # Coverage means a receiver has reported for one of these channels (heartbeat or output), not
+    # just that the channel is configured: otherwise "no transcripts" can't be told from "quiet".
+    rv = ReceiverView()
+    rstate = {cid: rv.status(ch, last_sdr.get(cid)) for cid, ch in voice.items()}
+    rstate.update({ch.id: rv.status(ch, eot_seen) for ch in eot_chans})
+    coverage_channels = [{"channel": c.label, "frequency_mhz": c.freq_mhz, "railroad": c.railroad,
+                          "subdivision": c.subdivision, "kind": _contract_kind(c),
+                          "receiver_state": rstate[c.id]["state"]}
+                         for c in list(voice.values()) + eot_chans]
+    coverage_channels = [{k: v for k, v in x.items() if v is not None} for x in coverage_channels]
+    real_voice = [c for c in voice.values() if c.enabled and not c.is_example]
+    real_eot = [c for c in eot_chans if not c.is_example]
+    notes = []
+    vstates = {rstate[c.id]["state"] for c in real_voice}
+    if not real_voice:
+        notes.append("No monitored rail voice channel for this location yet; add it to config/channels.local.yaml "
+                     "and config/rail_channels.local.yaml once a receiver covers it.")
+    elif "online" in vstates:
+        if not transcripts:
+            notes.append("The rail voice receiver is online and nothing was heard on these channels in the window: "
+                         "they were quiet.")
+    elif "offline" in vstates:
+        last = max(rstate[c.id].get("last_seen_at") or "" for c in real_voice)
+        notes.append(f"The rail voice receiver for this line is offline (last heard {last}): no transcripts here "
+                     "means no coverage, not a quiet line.")
+    else:
+        notes.append("Rail voice channels for this line are configured, but no receiver has ever reported for them "
+                     "(the SDR isn't installed or running yet): no transcripts here means no coverage, not a quiet line.")
+    estates = {rstate[c.id]["state"] for c in real_eot}
+    if real_eot and "online" not in estates:
+        notes.append("The EOT/HOT receiver is offline: an empty eot_hot list means no coverage." if "offline" in estates
+                     else "No EOT/HOT receiver has reported yet: an empty eot_hot list means no coverage.")
+    if eot_chans and any(c.bias_lat is None for c in eot_chans):
+        notes.append("EOT/HOT receiver location not configured; telemetry shown unfiltered.")
+    covered = any(rstate[c.id]["state"] != "not_installed" for c in real_voice + real_eot)
     out = {"generated_at": now_iso(),
-           "coverage": {"covered": bool(voice or eot_chans), "channels": coverage_channels},
+           "coverage": {"covered": covered, "channels": coverage_channels},
            "transcripts": transcripts, "detector_readouts": readouts, "eot_hot": eot_out,
            "reason_labels": reason_labels}
-    if note:
-        out["coverage"]["note"] = note
+    if notes:
+        out["coverage"]["note"] = " ".join(notes)
     if sub_name:
         out["subdivision"] = sub_name
     if rr_name:
@@ -321,6 +368,8 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
 
 @router.get("/feeds/status")
 def feeds_status():
+    """Feeds plus, per feed, `receiver` (is anything listening?), `coverage` (what it hears) and
+    `example`, and a top-level `coverage_summary` (docs/pulse-api.md#feeds_status)."""
     s = get_settings()
     now = datetime.now(timezone.utc)
     with get_engine().connect() as c:
@@ -328,7 +377,8 @@ def feeds_status():
             SELECT coalesce(channel_id, feed_id) AS cid, max(coalesce(captured_at, "timestamp")) AS last_at,
                    count(*) FILTER (WHERE coalesce(captured_at, "timestamp") >= now() - interval '1 hour') AS last_hour,
                    count(*) FILTER (WHERE status IN ('queued', 'transcribing', 'transcribed', 'extracting')) AS backlog,
-                   max(source) AS source
+                   max(source) AS source,
+                   max(coalesce(captured_at, "timestamp")) FILTER (WHERE source = 'sdr_files') AS last_sdr_at
               FROM transcript_chunks
              WHERE coalesce(captured_at, "timestamp") >= now() - interval '7 days' OR status <> 'done'
              GROUP BY 1""")).mappings()}
@@ -339,25 +389,32 @@ def feeds_status():
                                    WHERE status IN ('queued','transcribing','transcribed','extracting')""")).scalar()
         eot_last = c.execute(text("SELECT max(ts), count(*) FILTER (WHERE ts >= now() - interval '1 hour') "
                                   "FROM rail_telemetry")).first()
-    feeds = []
+    feeds, summary_items = [], []
     chans = load_channels()
+    rv = ReceiverView(s, now)
+    subs, areas = load_subdivisions(), load_areas()
     seen = set()
     for ch in chans:
         seen.add(ch.id)
         st = stats.get(ch.id, {})
         if ch.kind == "eot":
             last_at, last_hour = eot_last[0], int(eot_last[1] or 0)
-            hb = _heartbeat_age(s.traintap_csv)
+            hb = rv.heartbeat_age_s(ch.receiver_name or "traintap-eot")
             state = "down" if hb is None else ("up" if hb < 180 else ("degraded" if hb < 900 else "down"))
             source = "sdr:traintap"
+            evidence = eot_last[0]
         else:
             last_at, last_hour = st.get("last_at"), int(st.get("last_hour") or 0)
             state = _state_from_last(last_at, now)
             source = "sdr:" + ("rtl_airband" if (st.get("source") or "sdr_files") == "sdr_files" else st.get("source"))
+            evidence = st.get("last_sdr_at")
+        receiver = rv.status(ch, evidence)
+        summary_items.append((ch, receiver["state"]))
         f = {"feed_id": ch.id, "name": ch.label, "category": "rail" if ch.kind in RAIL_KINDS else "public_safety",
              "county": ch.county, "enabled": ch.enabled, "state": state if ch.enabled else "down",
              "last_chunk_at": _iso(last_at), "chunks_last_hour": last_hour, "source": source,
-             "backlog": int(st.get("backlog") or 0)}
+             "backlog": int(st.get("backlog") or 0), "example": ch.is_example,
+             "receiver": receiver, "coverage": coverage_for(ch, subs, areas)}
         feeds.append({k: v for k, v in f.items() if v is not None})
     for cid, st in stats.items():
         if cid in seen or not cid:
@@ -365,8 +422,10 @@ def feeds_status():
         feeds.append({"feed_id": cid, "name": cid, "category": "public_safety", "enabled": True,
                       "state": _state_from_last(st.get("last_at"), now), "last_chunk_at": _iso(st.get("last_at")),
                       "chunks_last_hour": int(st.get("last_hour") or 0), "source": f"sdr:{st.get('source') or 'unknown'}",
-                      "backlog": int(st.get("backlog") or 0), "unmapped": True})
+                      "backlog": int(st.get("backlog") or 0), "unmapped": True, "example": False,
+                      "receiver": rv.status(None, st.get("last_sdr_at")), "coverage": {}})
     return {"generated_at": now_iso(), "feeds": feeds,
+            "coverage_summary": coverage_summary(summary_items),
             "backlog": {"queued": int(backlog.get("queued", 0)), "transcribing": int(backlog.get("transcribing", 0)),
                         "transcribed": int(backlog.get("transcribed", 0)), "extracting": int(backlog.get("extracting", 0)),
                         "error": int(backlog.get("error", 0)),
@@ -378,10 +437,3 @@ def _state_from_last(last_at, now) -> str:
         return "down"
     age = (now - last_at).total_seconds()
     return "up" if age <= 2 * 3600 else ("degraded" if age <= 24 * 3600 else "down")
-
-
-def _heartbeat_age(csv_path: Path) -> float | None:
-    try:
-        return datetime.now(timezone.utc).timestamp() - (Path(csv_path).parent / "heartbeat").stat().st_mtime
-    except OSError:
-        return None
