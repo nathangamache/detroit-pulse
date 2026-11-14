@@ -208,11 +208,23 @@ and `coverage_summary` ([pulse-api.md](pulse-api.md#feeds_status)). The files li
   feed in 7 days) means `not_installed`.
 * rtl_airband's stats file also lists the channels it demodulates
   (`channel_activity_counter{freq="160.215",label="<channel id>"}`; the renderer sets each
-  `label` to the Pulse channel id). A feed gets a heartbeat from it only when its label is
-  listed **with its configured `freq_mhz`** (within 3 kHz), or, when it isn't labelled, when
-  its frequency is listed. A label on another frequency means `rail.local.conf` is older than
-  `channels.local.yaml`: that feed is not being listened to. Re-render `rail.local.conf` after
-  adding or changing channels.
+  `label` to the Pulse channel id and the file template to that channel's). A feed gets a
+  heartbeat from it only through the channel its recordings are filed under
+  (`core/receivers.py` `heard_via`):
+  * its own label **with its configured `freq_mhz`** (within 3 kHz). Its label on another
+    frequency means `rail.local.conf` is older than `channels.local.yaml`: not listened to;
+  * a frequency it shares with another **enabled** channel that rtl_airband demodulates once,
+    under that channel (a detector on the road channel). Its traffic is then filed as that
+    channel's, so `/v1/rail/activity` calls it quiet only at points that channel covers too;
+  * an unlabelled line, or a label that is no channel id, resolved the way `sdr_files`
+    resolves its files (by template, then frequency, first match in config order).
+
+  A frequency filed under a **disabled** channel (an id renamed with the old entry kept
+  `enabled: false`) or under a channel configured on another frequency is not listened to
+  either: its recordings would be dropped or filed elsewhere. `sdr_files` counts the rail
+  recordings it drops for a disabled channel (`dropped` in its heartbeat), and any in the
+  window keep it from being called quiet. Re-render `rail.local.conf` after adding, renaming
+  or changing channels.
 * Without a heartbeat file (e.g. rtl_airband run by hand without `stats_filepath`), Pulse
   can only go by recordings: the feed is `online` for `RECEIVER_STALE_S` after each one and
   then `offline` even if the channel is merely quiet. Configure the heartbeat.
@@ -264,16 +276,36 @@ turns its files and packets into rows did too. The ingest stage records both, in
   `blind:no_watch_dir` (no `SDR_WATCH_DIR`) or `blind:no_csv` (no `TRAINTAP_CSV`): its silence
   proves nothing. `sdr_files` also reports the recordings still being written (fresh
   `.mp3.tmp` files, or files younger than `SDR_MIN_FILE_AGE_S`) per channel: a transmission in
-  progress is traffic, never quiet. A stale `.tmp` left behind by a crash is ignored.
+  progress is traffic, never quiet. A stale `.tmp` left behind by a crash is ignored. It also
+  reports the rail recordings it dropped because their channel is disabled (`dropped`).
+* A beat is stamped with the time its poll **began**: everything the input held by then is in
+  the database or in `recording_now`, so the newest beat is how far the ingest stage has
+  looked. `sdr_files` polls every second and beats at once, after the poll that saw it, when a
+  transmission starts or ends or a recording is dropped, not only every 15 s.
 * With each beat it records its receivers' heartbeat files (`receiver:<name>`; `sdr_files`:
   the receivers of every enabled voice channel, `traintap`: the eot channels'): the file's
-  mtime, and for rtl_airband the label/frequency pairs it lists.
+  mtime, and for rtl_airband the label/frequency pairs it lists and its counters.
 * Beats form runs (`up_since` .. `last_seen`). A beat extends the newest run when nothing
-  changed and it comes within `LIVENESS_MAX_GAP_S` (150 s) of the last one; a longer gap, a
-  receiver that stopped rewriting its file, a different channel list (a re-render restarts
-  rtl_airband) or a blind beat starts a new run. So a receiver or ingest stage that was down
-  during the window, or came back in it, is "listening only since" its new run began.
-  Runs older than `LIVENESS_KEEP_DAYS` (3) are deleted.
+  changed and it comes within that component's own max gap of the last one:
+
+  | component | beats | max gap |
+  |---|---|---|
+  | `ingest:<source>` | every `INGEST_HEARTBEAT_S` (15 s) | 2 x 15 + 5 = 35 s |
+  | `receiver:<name>` with a stats file | every `RECEIVER_STATS_INTERVAL_S` (15 s, rtl_airband) | 15 + 15 + 15 = 45 s |
+  | `receiver:<name>` with a heartbeat file | every `RECEIVER_HEARTBEAT_INTERVAL_S` (60 s, traintap) | 60 + 15 + 30 = 105 s |
+
+  (a receiver: its interval, plus the ingest stage's sampling, plus half the interval, at
+  least 15 s; set another interval per receiver with `receivers: {<name>: {heartbeat_s: N}}`
+  in `channels.local.yaml`). A longer gap, a receiver that stopped rewriting its file, an
+  rtl_airband counter that went down (a restart, however quickly it came back), a different
+  channel list (a re-render restarts rtl_airband) or a blind beat starts a new run. So a
+  receiver or ingest stage that was down during the window, or came back in it, is "listening
+  only since" its new run began. What can't be seen is an outage that fits between two beats
+  within the max gap with no restart in it (rtl_airband: up to about 30 s; traintap: up to
+  about 45 s). Runs older than `LIVENESS_KEEP_DAYS` (3) are deleted.
+* A quiet window ends where the proof ends (`window_end`): at the ingest stage's newest beat
+  and the covering receivers' newest heartbeats, whichever is earliest, never at the request
+  time. An ingest stage that missed two beats (35 s) has no current heartbeat: `unknown`.
 
 The ingest stage runs in `pulse-transcribe`, which mounts `pulse_receivers` read-only at
 `/data/receivers` for this. After deploying a Pulse with this change (the image, the

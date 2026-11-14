@@ -118,7 +118,7 @@ close, else the latest per-transmission short summary.
      state: "activity" | "quiet" | "not_covered" | "unknown";
      reasons: string[];            // short, plain sentences ("csx_road: no receiver has ever reported")
      window_start: string;         // ISO 8601 UTC: now - since_minutes
-     window_end: string;           // now
+     window_end: string;           // now; for quiet, where the proof ends (see below)
      listening_since?: string;     // since when every covering channel and the ingest stage are proven
      counts: { transcripts: number; detector_readouts: number;
                recordings_without_text: number; eot_packets: number };   // covering channels only
@@ -141,19 +141,36 @@ close, else the latest per-transmission short summary.
      2. its receiver was listening since before `window_start`: the receiver's heartbeat
         history (the `liveness` table, [sdr-ingest.md](sdr-ingest.md#8-heartbeat-history-and-the-ingest-heartbeat))
         shows one unbroken run from before `window_start` to now, and its heartbeat file
-        agrees right now. A receiver that came back during the window is listening only
-        since then;
-     3. the receiver demodulates the configured frequency: its stats file names the channel
-        (label = channel id) with the channel's `freq_mhz` within 3 kHz, during that run and
-        now (a label on another frequency means it is *not* listening to that channel);
+        agrees right now. A run breaks at a gap longer than a missed beat or two of that
+        receiver (45 s for rtl_airband's 15 s stats file, 105 s for traintap's minute) and
+        at an rtl_airband counter that went down (a restart). A receiver that came back
+        during the window is listening only since then;
+     3. the receiver demodulates the configured frequency and files it under a channel that
+        covers the point: its stats file names the channel (label = channel id) with the
+        channel's `freq_mhz` within 3 kHz, during that run and now, or the frequency is
+        demodulated once under another enabled channel that covers the point too. A label on
+        another frequency, or the frequency filed under a disabled channel (a rename without
+        re-rendering `rail.local.conf`), means it is *not* listening to that channel;
      4. the ingest stage (pulse-transcribe's `sdr_files` for voice, `traintap` for EOT) beat
-        since before `window_start` and could see its input (watch directory / CSV);
+        since before `window_start`, within the last 35 s (two missed beats end its run), and
+        could see its input (watch directory / CSV);
      5. nothing was heard on the covering channels, and nothing in the window is left
         unattributed: no rail-band recording that no configured channel claims
-        (`unmapped:*`), no recording ingested in the window but stamped before it (a
-        transmission across the window start, or `SDR_FILENAME_TZ` not matching rtl_airband's
-        file names), no detector readout without a channel, no packet that no configured
-        eot channel claims.
+        (`unmapped:*`) or that the ingest stage dropped because its channel is disabled, no
+        recording ingested in the window but stamped before it (a transmission across the
+        window start, or `SDR_FILENAME_TZ` not matching rtl_airband's file names), no
+        detector readout without a channel, no packet that no configured eot channel claims.
+
+     The quiet claim then covers `window_start` to `window_end`, which is **not** the request
+     time but where the proof ends: the ingest stage's newest beat (stamped with when its
+     poll began, so it has looked at nothing later) and the covering receivers' newest
+     heartbeats, whichever is earliest. That is normally under 20 s before `generated_at` for
+     rail voice and up to about a minute for EOT/HOT (traintap's heartbeat is once a minute),
+     at most the receiver's max gap (45 s, 105 s); the reason says how far ("up to
+     <window_end> (N s before this answer ...)"). A gateway relays it as "quiet from
+     <window_start> to <window_end>", and a check of the window's length must allow that much.
+     `sdr_files` beats at once when a transmission starts, so a transmission after
+     `window_end` shows up within seconds.
    * `unknown`: nothing was heard, but one of those isn't shown; `reasons` says which
      (e.g. "receiver listening only since …, after the window start", "ingest (sdr_files) has
      no current heartbeat", "the receiver reports this channel on 161.1 MHz, not the
@@ -223,7 +240,10 @@ coverage_summary: {                      // top level
   * rtl_airband's heartbeat names the channels it demodulates (label = channel id, with its
     frequency); a feed it doesn't list, or lists on another frequency than `freq_mhz` (e.g.
     `rail.local.conf` wasn't re-rendered after adding or changing it), gets no heartbeat from
-    it and stays `not_installed` / `offline`. A feed it doesn't label matches by frequency.
+    it and stays `not_installed` / `offline`. A feed it doesn't label is heard through the
+    channel its frequency is filed under: an enabled one (a detector on the road channel's
+    frequency) counts, a disabled one (an id renamed, the old entry kept `enabled: false`,
+    `rail.local.conf` not re-rendered) doesn't ([sdr-ingest.md](sdr-ingest.md#6-receiver-heartbeats)).
 * `coverage`: the channel's `coverage:` block (`area`, `radius_km`, `lines` with `aliases`:
   every other name the same track has in other datasets, e.g. FRA vs NARN). Without one,
   `lines` come from the rail plan (subdivisions linked to the channel, with their `aliases`)

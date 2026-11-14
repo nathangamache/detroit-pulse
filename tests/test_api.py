@@ -198,15 +198,16 @@ NEAR = {"lat": 42.26, "lon": -83.71}
 
 
 def _beats(db, component: str, minutes: float, fingerprint: str = "", detail: dict | None = None,
-           until_s: float = 5) -> None:
-    """Liveness history (core/liveness.py): a beat every 30 s from `minutes` ago to `until_s` ago."""
+           until_s: float = 5, every_s: float = 15) -> None:
+    """Liveness history (core/liveness.py): a beat every `every_s` (INGEST_HEARTBEAT_S) from
+    `minutes` ago to `until_s` ago."""
     from core import liveness
     now = datetime.now(timezone.utc)
     t, end = now - timedelta(minutes=minutes), now - timedelta(seconds=until_s)
     with db.begin() as c:
         while t <= end:
             liveness.beat(c, component, t, fingerprint, detail)
-            t += timedelta(seconds=30)
+            t += timedelta(seconds=every_s)
 
 
 def _listening(db, status, prom: str | None = BOTH_TUNED, minutes: float = 40, eot: bool = True,
@@ -357,7 +358,8 @@ def test_mixed_receivers_say_quiet_only_where_listening(mixed):
     note = a["coverage"]["note"]
     assert "they were quiet" not in note and "these channels" not in note
     assert ("The rail voice receiver is online for 1 of 3 channels on this line (CSX Test Sub road) and nothing "
-            "was heard on it in the window: that channel was quiet.") in note
+            "was heard on it in the window (up to ") in note
+    assert ", Pulse's newest heartbeats): that channel was quiet." in note
     last = two_hours_ago.isoformat().replace("+00:00", "Z")
     assert (f"Not covered: 1 channel with no receiver (none has ever reported for it) and 1 channel whose receiver "
             f"is offline (last heard {last}). No transcripts on those channels means no coverage, not a quiet "

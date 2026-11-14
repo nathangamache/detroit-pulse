@@ -73,7 +73,10 @@ def test_verdict_shape_and_the_quiet_case(quiet):
     assert all(c["covers_point"] and c["receiver_state"] == "online" and c["listening_since"] for c in v["channels"])
     assert a["verdicts"]["eot"]["state"] == "quiet"
     assert a["verdicts"]["eot"]["channels"][0]["feed_id"] == "eot_hot"
-    assert abs((_t(v["window_end"]) - _t(v["window_start"])).total_seconds() - 30 * 60) < 2   # since_minutes=30
+    # since_minutes=30, and the quiet claim ends at Pulse's newest heartbeat (here the ingest
+    # stage's, 15 s before the request), never at the request time
+    assert 0 < 30 * 60 - (_t(v["window_end"]) - _t(v["window_start"])).total_seconds() < 40
+    assert _t(v["window_end"]) < _t(a["generated_at"]) and " s before this answer" in v["reasons"][0]
 
 
 # ── rule 1: coverage by the channel's own area, never by name or a fixed 25 km ─────────────
@@ -217,6 +220,79 @@ def test_a_gap_in_the_history_ends_the_run(quiet):
     assert _states(_get(client, since_minutes=9))["rail_voice"] == "quiet"
 
 
+def _sample(db, path, name: str, agos) -> None:
+    """The ingest stage's sampling of receiver `name` (core/liveness.observe_receiver, the real
+    path): its heartbeat file last written each of `agos` seconds ago, in turn."""
+    import os
+    import time
+
+    from core import liveness
+    for ago in agos:
+        t = time.time() - ago
+        os.utime(path, (t, t))
+        with db.begin() as c:
+            liveness.observe_receiver(c, name)
+
+
+def test_a_two_minute_outage_inside_the_window_is_never_quiet(quiet):
+    """rtl_airband's stats file is rewritten every 15 s and traintap's heartbeat once a minute.
+    A 130 s hole in the one and a 120 s hole in the other, 15 minutes ago: each receiver was deaf
+    for about two minutes inside the window, so neither kind is quiet (one 150 s max gap for
+    every component used to bridge both holes: "listening for the whole window")."""
+    client, status, db = quiet
+    prom, hb = status / "rail-airband.prom", status / "traintap-eot.heartbeat"
+    prom.write_text(BOTH_TUNED)
+    hb.write_text("")
+    _sample(db, prom, "rail-airband", list(range(2400, 999, -15)) + list(range(870, -1, -15)))
+    _sample(db, hb, "traintap-eot", list(range(2400, 999, -60)) + list(range(880, -1, -60)))
+    _beats(db, "ingest:sdr_files", 40)
+    _beats(db, "ingest:traintap", 40)
+    a = _get(client)
+    assert {c["receiver_state"] for c in a["coverage"]["channels"]} == {"online"}
+    assert _states(a) == {"rail_voice": "unknown", "eot": "unknown"}
+    assert "they were quiet" not in a["coverage"]["note"]
+    for kind, back in (("rail_voice", 870), ("eot", 880)):
+        v = a["verdicts"][kind]
+        assert any("receiver listening only since" in x for x in v["reasons"]), kind
+        assert _t(v["listening_since"]) > _t(v["window_start"]), kind
+        assert abs((_t(a["generated_at"]) - _t(v["listening_since"])).total_seconds() - back) < 5, kind
+    # the same history without the holes is quiet
+    with db.begin() as c:
+        c.execute(text("DELETE FROM liveness WHERE component LIKE 'receiver:%'"))
+    _sample(db, prom, "rail-airband", range(2400, -1, -15))
+    _sample(db, hb, "traintap-eot", range(2400, -1, -60))
+    assert _states(_get(client)) == {"rail_voice": "quiet", "eot": "quiet"}
+
+
+def test_an_rtl_airband_restart_inside_the_window_is_never_quiet(quiet):
+    """rtl_airband restarted ten minutes ago and was back before its next 15 s rewrite: no gap in
+    the stats file's mtimes, but its counters started again at 0. The receiver is listening only
+    since then. A restart the ingest stage hasn't recorded yet (the file read now) counts too."""
+    import os
+    import time
+    client, status, db = quiet
+    prom = status / "rail-airband.prom"
+
+    def stats(n: int) -> str:
+        return "".join(f'channel_activity_counter{{freq="{f}",label="{cid}"}}\t{n}\n'
+                       f'channel_squelch_counter{{freq="{f}",label="{cid}"}}\t{n // 10}\n'
+                       for f, cid in (("160.215", "csx_road"), ("160.950", "csx_yard")))
+    _listening(db, status, prom=None, ingest=True)
+    for i, ago in enumerate(range(2400, -1, -15)):
+        prom.write_text(stats(5000 + i if ago > 600 else i))         # back to 0 ten minutes ago
+        _sample(db, prom, "rail-airband", [ago])
+    v = _get(client)["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown" and any("receiver listening only since" in x for x in v["reasons"])
+    assert abs((datetime.now(timezone.utc) - _t(v["listening_since"])).total_seconds() - 600) < 20
+    assert _states(_get(client, since_minutes=9))["rail_voice"] == "quiet"
+    # it restarts again now: the ingest stage hasn't sampled the file since
+    prom.write_text(stats(0))
+    t = time.time()
+    os.utime(prom, (t, t))
+    v = _get(client, since_minutes=9)["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown" and any("receiver listening only since" in x for x in v["reasons"])
+
+
 # ── rule 3: the configured frequency ─────────────────────────────────────────────────────
 
 STALE_RENDER = ('channel_activity_counter{freq="161.100",label="csx_road"}\t0\n'
@@ -266,6 +342,89 @@ def test_a_render_change_since_the_window_start_is_not_quiet(quiet):
     assert v["state"] == "unknown" and any("listening only since" in x for x in v["reasons"])
 
 
+RENAMED = {"channels": [
+    # csx_road was csx_road_old: the old entry is kept disabled, and rail.local.conf still has it
+    {"id": "csx_road", "label": "CSX Test Sub road", "kind": "rail_road", "railroad": "CSX",
+     "subdivision": "Test Sub", "freq_mhz": 160.215, "coverage": {"radius_km": 5}},
+    {"id": "csx_road_old", "label": "CSX Test Sub road (old)", "kind": "rail_road", "railroad": "CSX",
+     "subdivision": "Test Sub", "freq_mhz": 160.215, "enabled": False},
+    QUIET["channels"][1], QUIET["channels"][3]]}
+OLD_RENDER = ('channel_activity_counter{freq="160.215",label="csx_road_old"}\t0\n'
+              'channel_activity_counter{freq="160.950",label="csx_yard"}\t0\n')
+
+
+def test_a_frequency_filed_under_a_disabled_channel_is_not_listening(db, cfg_dir, tmp_path, monkeypatch):
+    """A channel renamed in channels.local.yaml, its old id kept `enabled: false`, rail.local.conf
+    not re-rendered: rtl_airband still demodulates 160.215 MHz, but labels it (and names its
+    files) csx_road_old, whose recordings sdr_files drops. csx_road is not being listened to
+    (its frequency used to vouch for it: "quiet"), and a dropped recording in the window is
+    traffic Pulse didn't ingest."""
+    import time
+
+    from ingest.sources.sdr_files import SdrFileSource
+    client, status = _client(cfg_dir, tmp_path, monkeypatch, RENAMED)
+    _listening(db, status, OLD_RENDER)
+    st = {f["feed_id"]: f["receiver"]["state"] for f in client.get("/v1/feeds/status").json()["feeds"]}
+    assert st["csx_road"] == "not_installed" and st["csx_yard"] == "online"
+    a = _get(client)
+    v = a["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown" and "they were quiet" not in a["coverage"]["note"]
+    assert ("csx_road: the receiver files 160.215 MHz under csx_road_old, a disabled channel, so those "
+            "recordings are dropped (re-render rail.local.conf)") in v["reasons"]
+    road = next(c for c in v["channels"] if c["feed_id"] == "csx_road")
+    assert road["covers_point"] and "listening_since" not in road
+    # a recording from inside the window under the old name: dropped, and counted as such
+    watch = tmp_path / "sdr"
+    watch.mkdir()
+    name = datetime.fromtimestamp(time.time() - 300, tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    (watch / f"csx_road_old_{name}_160215000.mp3").write_bytes(b"ID3" + b"\0" * 100)
+    src = SdrFileSource(watch_dir=watch, min_age_s=0)
+    assert src.poll_once() == 0 and src.dropped["csx_road_old"]["n"] == 1
+    assert src.maybe_beat(force=True) is True
+    v = _get(client)["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown"
+    assert any(x.startswith("recordings of the disabled channel csx_road_old in the window") for x in v["reasons"])
+    # re-rendered: csx_road is listened to from then on, and the dropped recording still blocks quiet
+    with db.begin() as c:
+        c.execute(text("DELETE FROM liveness WHERE component = 'receiver:rail-airband'"))
+    _listening(db, status, BOTH_TUNED, eot=False, ingest=False)
+    v = _get(client)["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown" and not any("csx_road: " in x for x in v["reasons"])
+    assert _get(client, since_minutes=4)["verdicts"]["rail_voice"]["state"] == "quiet"    # before it
+
+
+SHARED = {"channels": [
+    # the road channel's own receiver area is 2 km around the subdivision center ...
+    {"id": "csx_road", "label": "CSX Test Sub road", "kind": "rail_road", "railroad": "CSX",
+     "subdivision": "Test Sub", "freq_mhz": 160.215, "coverage": {"radius_km": 2}},
+    # ... while the detector on the same frequency has the whole 8 km subdivision
+    {"id": "csx_det", "label": "CSX Test Sub detectors", "kind": "rail_detector", "railroad": "CSX",
+     "subdivision": "Test Sub", "freq_mhz": 160.215},
+    QUIET["channels"][1], QUIET["channels"][3]]}
+
+
+def test_a_channel_heard_through_another_counts_only_where_that_one_does(db, cfg_dir, tmp_path, monkeypatch):
+    """rtl_airband demodulates a shared frequency once, under the first channel (csx_road): a
+    detector on it is heard through csx_road and its traffic is filed as csx_road's. At a point
+    the detector covers but csx_road doesn't, csx_road's recordings never count, so the detector
+    can't be called quiet there (its frequency used to vouch for it: "quiet" with traffic on
+    csx_road)."""
+    client, status = _client(cfg_dir, tmp_path, monkeypatch, SHARED)
+    _listening(db, status, BOTH_TUNED)
+    with db.begin() as c:
+        _recording(c, "csx_road", "done", "detector milepost 4 no defects", 3, "sh-1")
+    four_km = _get(client, lat=CENTER[0] + 0.036, lon=CENTER[1])
+    v = four_km["verdicts"]["rail_voice"]
+    covers = {c["feed_id"]: c["covers_point"] for c in v["channels"]}
+    assert covers == {"csx_road": False, "csx_det": True, "csx_yard": True}
+    assert v["state"] == "unknown" and v["counts"]["transcripts"] == 0
+    assert ("csx_det: the receiver records this channel's frequency as csx_road, which doesn't cover this "
+            "point, so those recordings don't count here") in v["reasons"]
+    # where both cover the point, the detector is heard through csx_road and its traffic counts
+    one_km = _get(client, lat=CENTER[0] + 0.009, lon=CENTER[1])["verdicts"]["rail_voice"]
+    assert one_km["state"] == "activity" and one_km["counts"]["transcripts"] == 1
+
+
 # ── rule 4: the ingest stage ─────────────────────────────────────────────────────────────
 
 def test_quiet_needs_the_ingest_stage_for_the_whole_window(quiet):
@@ -281,7 +440,8 @@ def test_quiet_needs_the_ingest_stage_for_the_whole_window(quiet):
     assert "listening_since" not in a["verdicts"]["rail_voice"]
     # it stopped beating 10 minutes ago (pulse-transcribe down): no current heartbeat either
     _beats(db, "ingest:sdr_files", 60, until_s=10 * 60)
-    assert "ingest (sdr_files) has no current heartbeat" in _get(client)["verdicts"]["rail_voice"]["reasons"]
+    assert any(x.startswith("ingest (sdr_files) has no current heartbeat (its last beat was at ")
+               for x in _get(client)["verdicts"]["rail_voice"]["reasons"])
     # it is beating again, but only for 3 minutes
     _beats(db, "ingest:sdr_files", 3)
     v = _get(client)["verdicts"]["rail_voice"]
@@ -291,7 +451,7 @@ def test_quiet_needs_the_ingest_stage_for_the_whole_window(quiet):
     with db.begin() as c:
         c.execute(text("TRUNCATE liveness"))
     _listening(db, status, BOTH_TUNED, ingest=False)
-    _beats(db, "ingest:sdr_files", 60, "blind:no_watch_dir", until_s=60)
+    _beats(db, "ingest:sdr_files", 60, "blind:no_watch_dir", until_s=5)
     _beats(db, "ingest:traintap", 40)
     v = _get(client)["verdicts"]["rail_voice"]
     assert v["state"] == "unknown" and "ingest (sdr_files) can't see its input (no_watch_dir)" in v["reasons"]
@@ -305,6 +465,73 @@ def test_quiet_needs_the_ingest_stage_for_the_whole_window(quiet):
         c.execute(text("DELETE FROM liveness WHERE component = 'ingest:sdr_files'"))
     _beats(db, "ingest:sdr_files", 40)
     assert _states(_get(client)) == {"rail_voice": "quiet", "eot": "quiet"}
+
+
+def _last_beat(db, component: str) -> datetime:
+    with db.connect() as c:
+        return c.execute(text("SELECT max(last_seen) FROM liveness WHERE component = :c"), {"c": component}).scalar()
+
+
+def test_quiet_ends_at_the_ingest_stages_last_check(quiet, tmp_path):
+    """The ingest stage last looked at the recordings 15 s ago (nothing being written then); a
+    transmission began 8 s ago. "Quiet" may cover the window only up to that last look, never
+    up to the request: `window_end` is the ingest stage's last beat and the reason says so. The
+    real sdr_files source's next poll sees the transmission and beats at once: activity."""
+    import time
+
+    from ingest.sources.sdr_files import SdrFileSource
+    client, status, db = quiet
+    _listening(db, status, BOTH_TUNED, ingest=False)
+    _beats(db, "ingest:sdr_files", 40, "", {"recording_now": {}}, until_s=12)
+    _beats(db, "ingest:traintap", 40)
+    a = _get(client)
+    v = a["verdicts"]["rail_voice"]
+    last = _last_beat(db, "ingest:sdr_files")
+    assert v["state"] == "quiet" and _t(v["window_end"]) == last      # it used to be the request time
+    assert (_t(a["generated_at"]) - _t(v["window_end"])).total_seconds() >= 12
+    assert f"up to {v['window_end']}" in v["reasons"][0] and "s before this answer" in v["reasons"][0]
+    watch = tmp_path / "sdr"
+    watch.mkdir()
+    started = datetime.fromtimestamp(time.time() - 8, tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+    (watch / f"csx_road_{started}_160215000.mp3.tmp").write_bytes(b"ID3partial")
+    src = SdrFileSource(watch_dir=watch, min_age_s=1.5)
+    assert src.poll_once() == 0 and src.recording_now == {"csx_road": 1}
+    assert src.maybe_beat(force=src.urgent() != getattr(src, "_beat_urgent", None)) is True
+    assert _last_beat(db, "ingest:sdr_files") == src.checked_at        # the poll's start, not the beat's
+    v = _get(client)["verdicts"]["rail_voice"]
+    assert v["state"] == "activity" and v["counts"]["recordings_without_text"] == 1
+
+
+def test_a_stalled_ingest_stage_is_not_current(quiet, tmp_path):
+    """The ingest stage last beat 120 s ago and has been hung since; two transmissions finished
+    100 s and 60 s ago are on disk but not in the database. Its heartbeat is not current (two
+    missed beats end it, not 150 s), so this is unknown, not quiet. Once it resumes it ingests
+    both: activity."""
+    import os
+    import time
+
+    from ingest.sources.sdr_files import SdrFileSource
+    client, status, db = quiet
+    _listening(db, status, BOTH_TUNED, ingest=False)
+    _beats(db, "ingest:sdr_files", 40, "", {"recording_now": {}}, until_s=120)
+    _beats(db, "ingest:traintap", 40)
+    watch = tmp_path / "sdr"
+    watch.mkdir()
+    for ago in (100, 60):
+        name = datetime.fromtimestamp(time.time() - ago, tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+        f = watch / f"csx_road_{name}_160215000.mp3"
+        f.write_bytes(b"ID3" + b"\0" * 100)
+        t = time.time() - ago + 5
+        os.utime(f, (t, t))
+    a = _get(client)
+    v = a["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown" and "they were quiet" not in a["coverage"]["note"]
+    assert any(x.startswith("ingest (sdr_files) has no current heartbeat (its last beat was at ") for x in v["reasons"])
+    assert _states(a)["eot"] == "quiet"                                 # traintap is still beating
+    src = SdrFileSource(watch_dir=watch, min_age_s=1.5)
+    assert src.poll_once() == 2 and src.maybe_beat() is True
+    v = _get(client)["verdicts"]["rail_voice"]
+    assert v["state"] == "activity" and v["counts"]["recordings_without_text"] == 2
 
 
 # ── rule 5: nothing heard at all ─────────────────────────────────────────────────────────

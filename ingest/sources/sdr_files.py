@@ -19,6 +19,10 @@ sidecar with talkgroup/freq/start_time. If a sidecar exists it wins.
 
 The channel (label, kind, agency, rail subdivision ...) is looked up in
 config/channels(.local).yaml by template name, then talkgroup, then frequency.
+Recordings of a disabled channel are not ingested; on the rail band they are counted in the
+heartbeat's `dropped` (per channel: how many, and the newest), because a receiver still
+recording a channel Pulse doesn't ingest means its traffic is not in the database: then
+/v1/rail/activity can't call the window quiet.
 """
 from __future__ import annotations
 
@@ -33,7 +37,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from core import bus
-from core.config_files import match_channel
+from core.config_files import RAIL_VOICE_KINDS, match_channel
 from core.settings import get_settings
 from core.workqueue import enqueue_transmission
 from ingest.sources.base import Source
@@ -44,6 +48,9 @@ AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
 # A `.tmp` file rtl_airband is still writing (a transmission in progress) has a fresh mtime; one
 # left behind by a crash doesn't, and is not counted as recording now.
 TMP_ACTIVE_S = 120.0
+# the AAR railroad pool (as /v1/rail/activity's unmapped count): a disabled channel's recording
+# here, or one of a rail kind, is rail traffic Pulse dropped
+RAIL_BAND_HZ = (160_100_000, 161_580_000)
 
 _AIRBAND_RE = re.compile(
     r"^(?P<template>.+?)"
@@ -129,6 +136,9 @@ class SdrFileSource(Source):
         self.ingested = 0
         self.last_by_channel: dict[str, datetime] = {}
         self.recording_now: dict[str, int] = {}          # channel id -> files still being written
+        # disabled rail channel id -> {"n": recordings not ingested, "last": newest one's start, ISO}
+        self.dropped: dict[str, dict] = {}
+        self._dropped_seen: set[str] = set()
 
     def _candidates(self):
         """(path, in_progress) for every audio file; in_progress for `<name>.<ext>.tmp`."""
@@ -149,11 +159,30 @@ class SdrFileSource(Source):
             return None
         ch = match_channel(parsed.template, parsed.freq_hz, parsed.talkgroup)
         if ch is not None:
+            if not ch.enabled:
+                self._drop(ch, parsed, p)
             return ch.id if ch.enabled else None
         label = parsed.template or (f"tg{parsed.talkgroup}" if parsed.talkgroup else f"{parsed.freq_hz}")
         return f"unmapped:{label}"
 
+    def _drop(self, ch, parsed: ParsedName, p: Path) -> None:
+        """A recording `p` (its final name) of disabled channel `ch` that won't be ingested: counted
+        once, from when it is first seen (even still being written), when it is rail traffic."""
+        freq = parsed.freq_hz or (int(ch.freq_mhz * 1e6) if ch.freq_mhz else None)
+        if not (ch.kind in RAIL_VOICE_KINDS or (freq and RAIL_BAND_HZ[0] <= freq <= RAIL_BAND_HZ[1])):
+            return
+        key = str(p.resolve())
+        if key in self._dropped_seen:
+            return
+        self._dropped_seen.add(key)
+        d = self.dropped.setdefault(ch.id, {"n": 0, "last": None})
+        d["n"] += 1
+        at = parsed.opened_at.isoformat().replace("+00:00", "Z")
+        if d["last"] is None or at > d["last"]:
+            d["last"] = at
+
     def poll_once(self) -> int:
+        self.mark_checked()
         n = 0
         now = datetime.now(timezone.utc).timestamp()
         recording: dict[str, int] = {}
@@ -183,7 +212,15 @@ class SdrFileSource(Source):
         return None if self.watch_dir.is_dir() else "no_watch_dir"
 
     def beat_detail(self) -> dict:
-        return {"recording_now": dict(self.recording_now), "ingested": self.ingested}
+        out = {"recording_now": dict(self.recording_now), "ingested": self.ingested}
+        if self.dropped:
+            out["dropped"] = {k: dict(v) for k, v in self.dropped.items()}
+        return out
+
+    def urgent(self) -> object:
+        """Beat at once when a transmission starts or ends, or a recording is dropped."""
+        return (tuple(sorted(self.recording_now.items())),
+                tuple(sorted((k, v["n"]) for k, v in self.dropped.items())))
 
     def receiver_names(self) -> set[str]:
         from core.config_files import load_channels
@@ -201,6 +238,7 @@ class SdrFileSource(Source):
             return False
         ch = match_channel(parsed.template, parsed.freq_hz, parsed.talkgroup)
         if ch is not None and not ch.enabled:
+            self._drop(ch, parsed, p)
             return False
         if ch is None:
             label = parsed.template or (f"tg{parsed.talkgroup}" if parsed.talkgroup else f"{parsed.freq_hz}")

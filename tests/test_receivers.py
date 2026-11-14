@@ -229,6 +229,46 @@ def test_a_label_on_another_frequency_is_not_this_channel(status_dir):
     assert reported_freqs(pairs, Channel(id="other", label="o", kind="rail_voice", freq_mhz=1.0)) == []
 
 
+def test_a_frequency_is_heard_as_the_channel_its_recordings_are_filed_under():
+    """A stats line vouches for a channel only through the channel its recordings are filed under
+    (sdr_files): its own label, or a shared frequency demodulated once under another enabled
+    channel. A label that is a disabled channel (renamed, the old entry kept disabled, rail.local.conf
+    not re-rendered) or a channel configured on another frequency means the receiver isn't
+    listening to the channel on that frequency (it used to match by frequency alone)."""
+    from core.receivers import heard_via, pairs_cover, pairs_problem, parse_airband_pairs
+    ch = {c.id: c for c in (
+        Channel(id="t_road", label="r", kind="rail_road", freq_mhz=160.98),
+        Channel(id="t_road_old", label="o", kind="rail_road", freq_mhz=160.98, enabled=False),
+        Channel(id="t_disp", label="d", kind="rail_dispatcher", freq_mhz=161.07),
+        Channel(id="t_det", label="x", kind="rail_detector", freq_mhz=161.07),
+        Channel(id="moved", label="m", kind="rail_road", freq_mhz=160.5),
+        Channel(id="t_yard", label="y", kind="rail_yard", freq_mhz=160.62, templates=["yard_tmpl"]),
+    )}
+    stale = parse_airband_pairs('channel_activity_counter{freq="160.980",label="t_road_old"}\t0\n'
+                                'channel_activity_counter{freq="161.070",label="t_disp"}\t0\n'
+                                'channel_activity_counter{freq="161.900",label="moved"}\t0\n')
+    assert heard_via(stale, ch["t_road"], ch) == [] and not pairs_cover(stale, ch["t_road"], ch)
+    assert pairs_problem(stale, ch["t_road"], ch) == (
+        "the receiver files 160.98 MHz under t_road_old, a disabled channel, so those recordings are dropped "
+        "(re-render rail.local.conf)")
+    assert heard_via(stale, ch["t_disp"], ch) == ["t_disp"] and pairs_problem(stale, ch["t_disp"], ch) is None
+    assert heard_via(stale, ch["t_det"], ch) == ["t_disp"]          # a detector on the dispatcher frequency
+    assert heard_via(stale, ch["moved"], ch) == []                   # its own label, on another frequency
+    # a label that is no channel id resolves like sdr_files' files: by template, then frequency
+    other = parse_airband_pairs('channel_activity_counter{freq="160.980",label="gone"}\t0\n'
+                                'channel_activity_counter{freq="160.620",label="yard_tmpl"}\t0\n'
+                                'channel_activity_counter{freq="161.070"}\t0\n')
+    assert heard_via(other, ch["t_road"], ch) == ["t_road"]          # first on 160.98 is t_road (enabled)
+    assert heard_via(other, ch["t_yard"], ch) == ["t_yard"]
+    assert heard_via(other, ch["t_disp"], ch) == ["t_disp"] and heard_via(other, ch["t_det"], ch) == ["t_disp"]
+    first_disabled = {"t_road_old": ch["t_road_old"], **ch}          # the disabled one listed first
+    assert heard_via(other, ch["t_road"], first_disabled) == []
+    moved = parse_airband_pairs('channel_activity_counter{freq="160.980",label="moved"}\t0\n')
+    assert heard_via(moved, ch["t_road"], ch) == []
+    assert pairs_problem(moved, ch["t_road"], ch) == (
+        "the receiver demodulates 160.98 MHz as moved, which is configured on 160.5 MHz (re-render rail.local.conf)")
+
+
 def test_coverage_is_the_channels_own_area_first():
     """A channel's own area (bias or area with a radius) decides and a subdivision never stretches
     it; with only a radius it reaches that far from a subdivision it is on; an eot channel is

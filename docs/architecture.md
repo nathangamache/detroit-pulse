@@ -105,7 +105,9 @@ queued ──transcribe──▶ transcribed ──extract──▶ done
   quiet only on proof for the whole window: every channel whose own area covers it was listened
   to on its configured frequency since before the window, by the heartbeat history the ingest
   stage records in `liveness` (`core/liveness.py`, [sdr-ingest.md](sdr-ingest.md#8-heartbeat-history-and-the-ingest-heartbeat)),
-  the ingest stage itself beat as long, and nothing was heard.
+  with no gap longer than a missed beat or two of that receiver and no restart, the ingest
+  stage itself beat as long, and nothing was heard. The quiet window ends at the last moment
+  those heartbeats cover, never at the request time.
 
 ## Data model
 

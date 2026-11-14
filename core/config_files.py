@@ -283,6 +283,20 @@ def load_receiver_devices() -> dict[str, str]:
     return out
 
 
+def load_receiver_intervals() -> dict[str, float]:
+    """Receiver name -> how often it rewrites its heartbeat file, in seconds, from `receivers:
+    {<name>: {heartbeat_s: N}}` in channels(.local).yaml (core/liveness.py receiver_max_gap_s).
+    Receivers not listed go by the kind of file they write."""
+    out: dict[str, float] = {}
+    for name, r in (load_yaml("channels").get("receivers") or {}).items():
+        v = (r or {}).get("heartbeat_s")
+        if v is not None:
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                raise ValueError(f"receivers.{name}.heartbeat_s must be a positive number of seconds")
+            out[str(name)] = float(v)
+    return out
+
+
 def channel_by_id(channel_id: str) -> Channel | None:
     for c in load_channels():
         if c.id == channel_id:

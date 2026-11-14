@@ -76,10 +76,14 @@ class Settings(BaseSettings):
     receiver_status_dir: Path = REPO_DIR / "data" / "receivers"
     receiver_stale_s: float = 300.0
     # Liveness history (core/liveness.py), for /v1/rail/activity `verdicts`: the ingest stage beats
-    # every ingest_heartbeat_s and records its receivers' heartbeats; a gap longer than
-    # liveness_max_gap_s between two beats ends a run (nothing proves it kept listening).
+    # every ingest_heartbeat_s and records its receivers' heartbeats. A gap between two beats longer
+    # than the component's own max gap ends a run (nothing proves it kept listening): for the ingest
+    # stage 2 x ingest_heartbeat_s + 5 s; for a receiver its heartbeat interval + ingest_heartbeat_s
+    # + half the interval (at least 15 s). Receiver intervals by file kind (per receiver:
+    # `receivers: {<name>: {heartbeat_s: N}}` in channels(.local).yaml):
     ingest_heartbeat_s: float = 15.0
-    liveness_max_gap_s: float = 150.0
+    receiver_stats_interval_s: float = 15.0      # <name>.prom: rtl_airband's stats_update_interval
+    receiver_heartbeat_interval_s: float = 60.0  # <name>.heartbeat: traintap touches it once a minute
     liveness_keep_days: float = 3.0
     broadcastify_legacy_enabled: bool = False   # see ingest/sources/broadcastify_legacy.py (ToS)
     broadcastify_tos_acknowledged: bool = False

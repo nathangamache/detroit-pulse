@@ -17,9 +17,13 @@ point be called quiet?
 `unknown`     nothing was heard, but Pulse can't prove nothing was said: see `reasons`.
 `quiet`       nothing was heard, and for the WHOLE window every channel that covers the point
               was listened to: its receiver's heartbeat history shows it up since before
-              `window_start` with the configured frequency, the ingest stage's heartbeat
-              history shows it up since before `window_start` and able to see its input, and
-              nothing in the window is left unattributed (unmapped recordings or packets).
+              `window_start` with the configured frequency (and its recordings filed under a
+              channel that covers the point), the ingest stage's heartbeat history shows it up
+              since before `window_start` and able to see its input, and nothing in the window
+              is left unattributed (unmapped or dropped recordings, unclaimed packets). The
+              window then ends where that proof ends (`window_end`): at the ingest stage's last
+              check of its input and the covering receivers' newest heartbeats, whichever is
+              earliest, never at the request time. Pulse has looked at nothing after that.
 
 Pulse never says `quiet` on less than that. The inputs are built by api/routes/v1.py.
 """
@@ -49,15 +53,20 @@ class ChannelProof:
     receiver_state: str                         # not_installed | offline | online (now)
     last_seen_at: str | None = None
     listening_since: datetime | None = None     # the receiver's current run, if it listens to ch
+    heard_until: datetime | None = None         # that run's newest heartbeat (what it vouches up to)
     listened_in_window: bool = False            # some run in the window listened to ch, or online now
     reported_freqs: list[float] = field(default_factory=list)   # its label, on another frequency
+    problem: str | None = None                  # why the receiver lists its frequency but isn't hearing it
+    via_uncovered: list[str] = field(default_factory=list)      # heard through these, which don't cover
 
 
 @dataclass
 class IngestProof:
     source: str                                 # sdr_files | traintap
     up_since: datetime | None = None            # the current run, while it can see its input
+    checked_at: datetime | None = None          # its newest beat: when it last looked at all its input
     blind: str | None = None                    # why the current run can't see its input
+    last_beat: datetime | None = None           # with no current run: its newest beat in the window
 
 
 def _n(n: int, one: str, many: str | None = None) -> str:
@@ -74,11 +83,16 @@ def _grouped(items: list[tuple[str, str]]) -> list[str]:
 
 def _channel_gap(p: ChannelProof, window_start: datetime) -> str | None:
     """Why `p` (a covering channel) isn't proven for the whole window, or None if it is."""
+    if p.via_uncovered:
+        return (f"the receiver records this channel's frequency as {', '.join(p.via_uncovered)}, which doesn't "
+                "cover this point, so those recordings don't count here")
     if p.listening_since is not None and p.listening_since <= window_start:
         return None
     if p.reported_freqs:
         reported = ", ".join(f"{f:g}" for f in p.reported_freqs)
         return f"the receiver reports this channel on {reported} MHz, not the configured {p.ch.freq_mhz:g} MHz"
+    if p.problem:
+        return p.problem
     if p.listening_since is not None:
         return f"receiver listening only since {iso(p.listening_since)}, after the window start"
     if p.receiver_state == "not_installed":
@@ -88,6 +102,23 @@ def _channel_gap(p: ChannelProof, window_start: datetime) -> str | None:
     if p.listened_in_window:
         return "no heartbeat history shows the receiver listening for the whole window"
     return "no heartbeat history shows the receiver listening"
+
+
+def proven(p: ChannelProof, window_start: datetime) -> bool:
+    """A covering channel listened to for the whole window (its receiver's side of the proof)."""
+    return p.covers and _channel_gap(p, window_start) is None
+
+
+def _ingest_gap(ingest: IngestProof, window_start: datetime) -> str | None:
+    if ingest.blind:
+        return f"ingest ({ingest.source}) can't see its input ({ingest.blind})"
+    if ingest.up_since is None:
+        if ingest.last_beat is not None:
+            return f"ingest ({ingest.source}) has no current heartbeat (its last beat was at {iso(ingest.last_beat)})"
+        return f"ingest ({ingest.source}) has no current heartbeat"
+    if ingest.up_since > window_start:
+        return f"ingest ({ingest.source}) heartbeat only since {iso(ingest.up_since)}, after the window start"
+    return None
 
 
 def build(kind: str, proofs: list[ChannelProof], counts: dict[str, int], ingest: IngestProof,
@@ -123,21 +154,25 @@ def build(kind: str, proofs: list[ChannelProof], counts: dict[str, int], ingest:
             reasons += _grouped(gaps)
         else:
             problems = _grouped(gaps)
-            if ingest.blind:
-                problems.append(f"ingest ({ingest.source}) can't see its input ({ingest.blind})")
-            elif ingest.up_since is None:
-                problems.append(f"ingest ({ingest.source}) has no current heartbeat")
-            elif ingest.up_since > window_start:
-                problems.append(f"ingest ({ingest.source}) heartbeat only since {iso(ingest.up_since)}, "
-                                "after the window start")
+            if (g := _ingest_gap(ingest, window_start)):
+                problems.append(g)
             problems += unattributed or []
+            ends = [ingest.checked_at] + [p.heard_until for p in covering]
+            if not problems and any(e is None for e in ends):
+                problems.append("no record of when Pulse last checked the receivers and the ingest stage")
             if problems:
                 state = "unknown"
                 reasons += problems
             else:
                 state = "quiet"
-                reasons.append(f"every {noun} channel that covers this point was listened to for the whole "
-                               "window (receiver and ingest heartbeats) and nothing was heard")
+                # The proof ends at the earliest of the ingest stage's last check of its input and the
+                # covering receivers' newest heartbeats: Pulse has looked at nothing after that.
+                proven_end = min([window_end] + ends)
+                lag = max(0, round((window_end - proven_end).total_seconds()))
+                reasons.append(f"every {noun} channel that covers this point was listened to for the whole window, "
+                               f"up to {iso(proven_end)} ({lag} s before this answer: Pulse's newest receiver and "
+                               "ingest heartbeats), and nothing was heard")
+                window_end = proven_end
     if covering and ingest.up_since and not ingest.blind and all(p.listening_since for p in covering):
         listening_since = max([ingest.up_since] + [p.listening_since for p in covering])
     out = {"state": state, "reasons": reasons, "window_start": iso(window_start), "window_end": iso(window_end),

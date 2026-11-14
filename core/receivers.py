@@ -9,7 +9,10 @@ silent, into RECEIVER_STATUS_DIR (the `pulse_receivers` volume in deploy/docker-
                     rtl_airband demodulates (label = Pulse channel id, freq in MHz), so a channel
                     that isn't in it gets no heartbeat from that receiver. A channel whose label
                     is in it with another frequency than its configured `freq_mhz` (the config
-                    changed and rail.local.conf wasn't re-rendered) gets none either.
+                    changed and rail.local.conf wasn't re-rendered) gets none either, nor does a
+                    frequency the receiver files under another channel that is disabled or
+                    configured elsewhere (heard_via). Its counters only grow while rtl_airband
+                    runs, so one that went down shows a restart (core/liveness.py).
   <name>.heartbeat  any file the receiver touches periodically: traintap's `--heartbeat`
                     (about once a minute while its decode loop runs).
 
@@ -32,11 +35,11 @@ from __future__ import annotations
 
 import re
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.config_files import (RAIL_KINDS, Area, Channel, RailLine, Subdivision, haversine_km,
+from core.config_files import (RAIL_KINDS, Area, Channel, RailLine, Subdivision, haversine_km, load_channels,
                                load_receiver_devices, names_match)
 from core.settings import Settings, get_settings
 
@@ -46,6 +49,9 @@ FREQ_TOLERANCE_MHZ = 0.003          # a stats line's frequency matches a channel
 
 # rtl_airband stats lines: channel_activity_counter{freq="160.215",label="csx_road"}\t123
 _METRIC = re.compile(r'^channel_\w+\{freq="([0-9.]+)"(?:,label="([^"]*)")?\}', re.M)
+# its counters (TYPE counter: *_counter, *_count), on complete lines only: a line cut off by a read
+# mid-rewrite must never look like a counter that went down
+_COUNTER = re.compile(r'^(\w+_(?:counter|count))\{([^}\n]*)\}\t(\d+)\n', re.M)
 _MAX_STATS_BYTES = 1 << 20
 
 # (label or None, frequency in MHz) for each channel a receiver says it demodulates
@@ -67,16 +73,87 @@ def _freq_ok(f: float, want: float) -> bool:
     return abs(f - want) < FREQ_TOLERANCE_MHZ
 
 
-def pairs_cover(pairs: Pairs, ch: Channel) -> bool:
-    """Does a receiver that says it demodulates `pairs` listen to `ch`? Its label (the Pulse
-    channel id) must come with the channel's configured frequency: a label match on another
-    frequency means the receiver's config is stale, so it is NOT listening to this channel. A
-    channel the receiver doesn't label is matched by frequency (an unlabelled channel, or one
-    that shares another channel's frequency, like a detector on the road channel)."""
+def _known(known: dict[str, Channel] | None, ch: Channel) -> dict[str, Channel]:
+    """Every configured channel by id (in config order), with `ch` itself at the end if absent."""
+    if known is None:
+        known = {c.id: c for c in load_channels()}
+    return known if ch.id in known else {**known, ch.id: ch}
+
+
+def recorded_as(label: str | None, f: float, known: dict[str, Channel]) -> Channel | None:
+    """The configured channel that `sdr_files` files a receiver channel's recordings under.
+    scripts/render_rail_conf.py writes each rtl_airband channel with label = the Pulse channel id
+    and that channel's file template, so a label that is a channel id means that channel, but
+    only if it is configured on that frequency (else the render is stale and None). An
+    unlabelled channel, or a label that is no channel id, resolves the way match_channel resolves
+    its files: by template (the label), then by frequency, first match in config order."""
+    if label is not None and label in known:
+        c = known[label]
+        return c if c.freq_mhz is None or _freq_ok(f, c.freq_mhz) else None
+    if label is not None:
+        for c in known.values():
+            if label in c.templates:
+                return c
+    for c in known.values():
+        if c.freq_mhz is not None and _freq_ok(f, c.freq_mhz):
+            return c
+    return None
+
+
+def heard_via(pairs: Pairs, ch: Channel, known: dict[str, Channel] | None = None) -> list[str]:
+    """Through which receiver channels does a receiver that says it demodulates `pairs` hear
+    `ch`? As the ids of the enabled channels their recordings are filed under (recorded_as):
+
+    * `[ch.id]`: it lists ch's own label with ch's configured frequency (or, unlabelled, ch's
+      frequency resolves to ch). Its label on another frequency means the receiver's config is
+      stale: it is NOT listening to ch (`[]`), whatever else is on that frequency;
+    * another enabled channel's id: ch shares that channel's frequency, which the receiver
+      demodulates once, under that channel (a detector on the road channel);
+    * `[]` otherwise, and when ch's frequency is filed under a channel that is disabled (its
+      recordings are dropped: a channel renamed or retired without re-rendering rail.local.conf)
+      or configured on another frequency.
+
+    `known`: every configured channel by id (default: config/channels(.local).yaml)."""
     mine = [f for label, f in pairs if label == ch.id]
     if mine:
-        return ch.freq_mhz is None or any(_freq_ok(f, ch.freq_mhz) for f in mine)
-    return ch.freq_mhz is not None and any(_freq_ok(f, ch.freq_mhz) for _, f in pairs)
+        return [ch.id] if ch.freq_mhz is None or any(_freq_ok(f, ch.freq_mhz) for f in mine) else []
+    if ch.freq_mhz is None:
+        return []
+    known = _known(known, ch)
+    out: list[str] = []
+    for label, f in pairs:
+        if not _freq_ok(f, ch.freq_mhz):
+            continue
+        c = recorded_as(label, f, known)
+        if c is not None and c.enabled and c.id not in out:
+            out.append(c.id)
+    return out
+
+
+def pairs_cover(pairs: Pairs, ch: Channel, known: dict[str, Channel] | None = None) -> bool:
+    """Does a receiver that says it demodulates `pairs` listen to `ch` (heard_via)?"""
+    return bool(heard_via(pairs, ch, known))
+
+
+def pairs_problem(pairs: Pairs, ch: Channel, known: dict[str, Channel] | None = None) -> str | None:
+    """Why a receiver that lists ch's frequency still isn't listening to `ch`, in plain words
+    (None when it is, or when it doesn't list the frequency at all). The label case is
+    reported_freqs'."""
+    if ch.freq_mhz is None or heard_via(pairs, ch, known) or any(label == ch.id for label, _ in pairs):
+        return None
+    known = _known(known, ch)
+    for label, f in pairs:
+        if not _freq_ok(f, ch.freq_mhz):
+            continue
+        c = recorded_as(label, f, known)
+        if c is None and label in known:
+            other = known[label]
+            return (f"the receiver demodulates {f:g} MHz as {other.id}, which is configured on "
+                    f"{other.freq_mhz:g} MHz (re-render rail.local.conf)")
+        if c is not None and not c.enabled:
+            return (f"the receiver files {f:g} MHz under {c.id}, a disabled channel, so those recordings are "
+                    "dropped (re-render rail.local.conf)")
+    return None
 
 
 def reported_freqs(pairs: Pairs, ch: Channel) -> list[float]:
@@ -94,6 +171,7 @@ class Heartbeat:
     path: Path
     at: datetime                              # file mtime, UTC
     pairs: Pairs = ()                         # rtl_airband (label, freq MHz) per demodulated channel
+    counters: dict[str, int] = field(default_factory=dict, compare=False, hash=False)   # rtl_airband's
 
     @property
     def labels(self) -> frozenset[str]:
@@ -107,13 +185,13 @@ class Heartbeat:
     def is_stats(self) -> bool:
         return self.path.suffix == ".prom"
 
-    def covers(self, ch: Channel) -> bool:
+    def covers(self, ch: Channel, known: dict[str, Channel] | None = None) -> bool:
         """Does this heartbeat speak for `ch`? A plain heartbeat (or a stats file we couldn't
         parse, e.g. read mid-rewrite) covers every channel of its receiver; a stats file
         covers the channels it lists with their configured frequency (pairs_cover)."""
         if not self.pairs:
             return True
-        return pairs_cover(self.pairs, ch)
+        return pairs_cover(self.pairs, ch, known)
 
 
 def parse_airband_pairs(text: str) -> Pairs:
@@ -122,6 +200,12 @@ def parse_airband_pairs(text: str) -> Pairs:
     for m in _METRIC.finditer(text):
         out.add((m[2] or None, round(float(m[1]), 4)))
     return tuple(sorted(out, key=lambda p: (p[1], p[0] or "")))
+
+
+def parse_airband_counters(text: str) -> dict[str, int]:
+    """rtl_airband's counters ('metric{labels}' -> value), from complete lines only. They only
+    grow while rtl_airband runs; after a restart they start again at 0."""
+    return {f"{m[1]}{{{m[2]}}}": int(m[3]) for m in _COUNTER.finditer(text)}
 
 
 def parse_airband_stats(text: str) -> tuple[frozenset[str], tuple[float, ...]]:
@@ -155,10 +239,10 @@ def read_heartbeat(name: str, s: Settings | None = None) -> Heartbeat | None:
         return Heartbeat(name, path, at)
     try:
         with open(path, "rb") as f:
-            pairs = parse_airband_pairs(f.read(_MAX_STATS_BYTES).decode("utf-8", "replace"))
+            body = f.read(_MAX_STATS_BYTES).decode("utf-8", "replace")
     except OSError:
-        pairs = ()
-    return Heartbeat(name, path, at, pairs)
+        body = ""
+    return Heartbeat(name, path, at, parse_airband_pairs(body), parse_airband_counters(body))
 
 
 def state_from(last_seen: datetime | None, now: datetime, stale_s: float) -> str:
@@ -174,6 +258,7 @@ class ReceiverView:
         self.s = settings or get_settings()
         self.now = _utc(now) or datetime.now(timezone.utc)
         self.devices = load_receiver_devices()
+        self.known = {c.id: c for c in load_channels()}
         self._hb: dict[str, Heartbeat | None] = {}
 
     def heartbeat(self, name: str | None) -> Heartbeat | None:
@@ -192,7 +277,7 @@ class ReceiverView:
         receiver output (SDR recording or EOT packet) from the database."""
         name = ch.receiver_name if ch is not None else None
         hb = self.heartbeat(name)
-        seen = [t for t in (_utc(evidence_at), hb.at if hb is not None and hb.covers(ch) else None) if t]
+        seen = [t for t in (_utc(evidence_at), hb.at if hb is not None and hb.covers(ch, self.known) else None) if t]
         last = max(seen) if seen else None
         out = {"state": state_from(last, self.now, self.s.receiver_stale_s)}
         if last is not None:

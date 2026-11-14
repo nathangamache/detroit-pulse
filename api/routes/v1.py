@@ -17,9 +17,11 @@ from api import rail_verdicts
 from core.config_files import (RAIL_KINDS, RAIL_VOICE_KINDS, Channel, load_areas, load_channels, load_subdivisions,
                                norm_line_name)
 from core.db import get_engine
-from core.liveness import current, ingest_component, receiver_component, runs_since
+from core.liveness import (current, file_continues, ingest_component, ingest_max_gap_s, receiver_component,
+                           receiver_max_gap_s, runs_since)
 from core.receivers import (RECEIVER_STATES, ReceiverView, channel_covers_point, channel_matches_hint, coverage_for,
-                            coverage_summary, on_railroad, on_subdivision, own_places, reported_freqs)
+                            coverage_summary, heard_via, on_railroad, on_subdivision, own_places, pairs_problem,
+                            reported_freqs)
 from core.settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -55,6 +57,17 @@ def _iso(v) -> str | None:
     if v.tzinfo is None:
         v = v.replace(tzinfo=timezone.utc)
     return v.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso(v) -> datetime | None:
+    """An ISO 8601 string (as _iso writes it) back to an aware datetime; None if it isn't one."""
+    if not isinstance(v, str):
+        return None
+    try:
+        t = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
 
 
 def _bad(msg: str) -> HTTPException:
@@ -255,13 +268,16 @@ def _not_proven(n_on: int, n_all: int) -> str:
 
 
 def _voice_notes(chans: list[Channel], rstate: dict[str, dict], heard: bool,
-                 unread: dict[str, int] | None = None, proven: set[str] | frozenset[str] = frozenset()) -> list[str]:
+                 unread: dict[str, int] | None = None, proven: set[str] | frozenset[str] = frozenset(),
+                 until: str | None = None) -> list[str]:
     """`coverage.note` sentences for a point's enabled, non-example voice channels. Only a channel
     in `proven` (listened to for the whole window, receiver and ingest: api/rail_verdicts.py) can
     be called quiet, and only when nothing was recorded in the window: `heard` (any transcript)
     or `unread` (recordings with no text yet, by kind) means traffic. A channel that is merely
     `online` now is not proof. When the point is only partly listened to, the channels with no
-    receiver (`not_installed`) or an `offline` one are counted as not covered."""
+    receiver (`not_installed`) or an `offline` one are counted as not covered. `until`: where
+    the proof for the `proven` channels ends (Pulse's newest heartbeats), said with "quiet"."""
+    window = f"the window (up to {until}, Pulse's newest heartbeats)" if until else "the window"
     if not chans:
         return ["No monitored rail voice channel for this location yet; add it to config/channels.local.yaml "
                 "and config/rail_channels.local.yaml once a receiver covers it."]
@@ -273,8 +289,8 @@ def _voice_notes(chans: list[Channel], rstate: dict[str, dict], heard: bool,
     notes, gap = [], None
     if not off and not missing:
         if not heard and all(c.id in proven for c in on):
-            notes.append("The rail voice receiver is online and nothing was heard on these channels in the "
-                         "window: they were quiet.")
+            notes.append("The rail voice receiver is online and nothing was heard on these channels in "
+                         f"{window}: they were quiet.")
         elif not heard:
             notes.append(_not_proven(len(on), len(chans)))
     elif not on and not off:
@@ -294,7 +310,7 @@ def _voice_notes(chans: list[Channel], rstate: dict[str, dict], heard: bool,
             were = "that channel was" if one else "those channels were"
             notes.append(f"The rail voice receiver is online for {len(quiet)} of {_channels_n(len(chans))} on "
                          f"this line ({', '.join(c.label for c in quiet)}) and nothing was heard on "
-                         f"{'it' if one else 'them'} in the window: {were} quiet.")
+                         f"{'it' if one else 'them'} in {window}: {were} quiet.")
             if len(quiet) < len(on):
                 notes.append(_not_proven(len(on) - len(quiet), len(chans)))
         elif not heard:
@@ -361,6 +377,10 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
     components = ([receiver_component(n) for n in receivers]
                   + [ingest_component("sdr_files"), ingest_component("traintap")])
     with get_engine().connect() as c:
+        # The heartbeat history first: every ingest beat read here was committed after the rows its
+        # poll ingested, so the queries below (each sees all rows committed before it starts) hold
+        # everything the newest beat says it has looked at.
+        runs = runs_since(c, components, since)
         last_sdr = dict(c.execute(text("""
             SELECT channel_id, max(coalesce(captured_at, "timestamp")) FROM transcript_chunks
              WHERE channel_id = ANY(CAST(:ids AS text[])) AND source = 'sdr_files'
@@ -420,7 +440,6 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
         eot_n = dict(c.execute(text("""
             SELECT coalesce(channel, ''), count(*) FROM rail_telemetry WHERE ts >= :since GROUP BY 1"""),
                                {"since": since}).all())
-        runs = runs_since(c, components, since)
 
     transcripts, weights = [], {}
     for r in tx:
@@ -474,32 +493,51 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
                          for c in list(voice.values()) + eot_chans]
     coverage_channels = [{k: v for k, v in x.items() if v is not None} for x in coverage_channels]
     real_voice = [c for c in voice.values() if c.enabled and not c.is_example]
+    real_voice_ids = {c.id for c in real_voice}
     real_eot = [c for c in eot_chans if not c.is_example]
 
     # ── verdicts (api/rail_verdicts.py): may this point be called quiet? ─────────────────────
-    max_gap = s.liveness_max_gap_s
+    ingest_gap = ingest_max_gap_s(s)
 
     def ingest_proof(source: str) -> tuple[rail_verdicts.IngestProof, dict]:
-        cur = current(runs.get(ingest_component(source), []), now, max_gap)
+        iruns = runs.get(ingest_component(source), [])
+        cur = current(iruns, now, ingest_gap)
         if cur is None:
-            return rail_verdicts.IngestProof(source), {}
+            return rail_verdicts.IngestProof(source, last_beat=iruns[0].last_seen if iruns else None), {}
         if cur.fingerprint.startswith("blind:"):
             return rail_verdicts.IngestProof(source, blind=cur.fingerprint[len("blind:"):]), {}
-        return rail_verdicts.IngestProof(source, up_since=cur.up_since), cur.detail
+        # its newest beat is when it last looked at all its input: the proof ends there
+        return rail_verdicts.IngestProof(source, up_since=cur.up_since, checked_at=cur.last_seen), cur.detail
 
-    def channel_proof(ch: Channel, covers: bool) -> rail_verdicts.ChannelProof:
+    def channel_proof(ch: Channel, covering: set[str]) -> rail_verdicts.ChannelProof:
+        """`covering`: the ids of the enabled, non-example channels of ch's kind that cover the point."""
+        covers = ch.id in covering
         st = rstate[ch.id]
         hb = rv.heartbeat(ch.receiver_name)
         rruns = runs.get(receiver_component(ch.receiver_name), []) if ch.receiver_name else []
-        cur = current(rruns, now, max_gap)
+        stats = rruns[0].is_stats if rruns else bool(hb is not None and hb.is_stats)
+        gap = receiver_max_gap_s(ch.receiver_name, stats, s) if ch.receiver_name else 0.0
+        cur = current(rruns, now, gap)
         # listening since the current run began, if that run listened to this channel and the
-        # heartbeat file still agrees right now
-        hb_ok = hb is not None and hb.covers(ch) and (now - hb.at).total_seconds() <= max_gap
+        # heartbeat file still agrees right now (the same channel list, counters not reset)
+        hb_ok = hb is not None and hb.covers(ch, chans) and (now - hb.at).total_seconds() <= gap
+        since = until = None
+        if cur is not None and hb_ok and cur.covers(ch, chans):
+            cont = file_continues(cur, hb, gap)
+            if cont is None:
+                since, until = cur.up_since, cur.last_seen
+            elif cont:
+                since, until = cur.up_since, hb.at
+            else:                       # restarted or re-rendered since the ingest stage last looked
+                since = until = hb.at
+        via = heard_via(hb.pairs, ch, chans) if hb is not None and hb.pairs else [ch.id]
         return rail_verdicts.ChannelProof(
             ch=ch, covers=covers, receiver_state=st["state"], last_seen_at=st.get("last_seen_at"),
-            listening_since=cur.up_since if cur is not None and hb_ok and cur.covers(ch) else None,
-            listened_in_window=st["state"] == "online" or any(r.covers(ch) for r in rruns),
-            reported_freqs=reported_freqs(hb.pairs, ch) if hb is not None else [])
+            listening_since=since, heard_until=until,
+            listened_in_window=st["state"] == "online" or any(r.covers(ch, chans) for r in rruns),
+            reported_freqs=reported_freqs(hb.pairs, ch) if hb is not None else [],
+            problem=pairs_problem(hb.pairs, ch, chans) if hb is not None and hb.pairs else None,
+            via_uncovered=[cid for cid in via if cid != ch.id and cid not in covering] if covers else [])
 
     def has_place(ch: Channel) -> bool:
         return bool(own_places(ch, areas)) or any(on_subdivision(ch, sd) and (sd.center or sd.bbox)
@@ -534,25 +572,36 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
         voice_unattributed.append(f"{_recordings_n(int(skewed))} ingested in the window but stamped before it "
                                   "(a transmission across the window start, or a file name time zone other than "
                                   "SDR_FILENAME_TZ)")
-    voice_proofs = [channel_proof(c, c.id in voice) for c in real_voice_cands]
+    # Rail recordings the ingest stage dropped because their channel is disabled: a receiver still
+    # records a channel Pulse doesn't ingest (renamed or retired without re-rendering rail.local.conf).
+    for cid, d in sorted((sdr_detail.get("dropped") or {}).items()):
+        last = _parse_iso(d.get("last"))
+        if last is not None and last >= since:
+            voice_unattributed.append(f"recordings of the disabled channel {cid} in the window (the newest at "
+                                      f"{_iso(last)}) were not ingested: a receiver still records it (re-render "
+                                      "rail.local.conf)")
+    voice_proofs = [channel_proof(c, real_voice_ids) for c in real_voice_cands]
     v_voice = rail_verdicts.build("rail_voice", voice_proofs, voice_counts, sdr_ingest, since, now,
                                   voice_unattributed, no_place=[c for c in real_voice_cands if not has_place(c)])
     # the channels `coverage.note` may call quiet: listened to for the whole window, ingest too
     sdr_ok = not sdr_ingest.blind and sdr_ingest.up_since is not None and sdr_ingest.up_since <= since
-    proven = {p.ch.id for p in voice_proofs if p.covers and p.listening_since is not None
-              and p.listening_since <= since} if sdr_ok and not voice_unattributed else set()
+    proven = {p.ch.id for p in voice_proofs if rail_verdicts.proven(p, since)} \
+        if sdr_ok and not voice_unattributed else set()
 
     eot_known = {c.id for c in eot_cands}
     real_eot_ids = {c.id for c in real_eot}
     stray = sum(int(n) for ch_id, n in eot_n.items() if ch_id not in eot_known)
     eot_unattributed = ([f"{stray} EOT/HOT packet(s) in the window not attributed to a configured eot channel"]
                         if stray else [])
-    v_eot = rail_verdicts.build("eot", [channel_proof(c, c.id in real_eot_ids) for c in real_eot_cands],
+    v_eot = rail_verdicts.build("eot", [channel_proof(c, real_eot_ids) for c in real_eot_cands],
                                 {"eot_packets": sum(int(eot_n.get(cid, 0)) for cid in real_eot_ids)},
                                 eot_ingest, since, now, eot_unattributed,
                                 no_place=[c for c in real_eot_cands if not has_place(c)])
 
-    notes = _voice_notes(real_voice, rstate, heard=bool(transcripts), unread=unread, proven=proven)
+    ends = [sdr_ingest.checked_at] + [p.heard_until for p in voice_proofs if p.ch.id in proven]
+    note_until = _iso(min(e for e in ends + [now] if e is not None)) if proven else None
+    notes = _voice_notes(real_voice, rstate, heard=bool(transcripts), unread=unread, proven=proven,
+                         until=note_until)
     real_hinted = [c for c in hinted if c.enabled and not c.is_example]
     if real_hinted and not any(c.id in voice for c in real_hinted):
         sd = next((sd for sd in rr_subs if sd.matches(subdivision, exact=True)), None)

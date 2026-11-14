@@ -104,6 +104,7 @@ class TraintapSource(Source):
         return min(ages) if ages else None
 
     def poll_once(self) -> int:
+        self.mark_checked()
         try:
             st = self.path.stat()
         except OSError:

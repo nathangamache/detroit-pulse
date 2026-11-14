@@ -99,15 +99,111 @@ def test_record_ingest_beats_and_observes_its_receivers(db, status_dir):
     assert detail == {"ingested": 3}
 
 
+def _observe(db, path, name: str, ago_s: float) -> None:
+    """The ingest stage samples receiver `name` whose heartbeat file was last written `ago_s` ago."""
+    t = time.time() - ago_s
+    os.utime(path, (t, t))
+    with db.begin() as c:
+        liveness.observe_receiver(c, name)
+
+
+def test_each_component_has_its_own_max_gap(cfg_dir):
+    """A run may bridge only a missed beat or two of that component, not a fixed 150 s: about 10
+    of rtl_airband's 15 s stats rewrites (a receiver deaf for two minutes) used to stay one run."""
+    from core import config_files
+    assert liveness.receiver_max_gap_s("rail-airband", stats=True) == 45          # 15 + 15 + 15
+    assert liveness.receiver_max_gap_s("traintap-eot", stats=False) == 105        # 60 + 15 + 30
+    assert liveness.ingest_max_gap_s() == 35                                      # 2 x 15 + 5
+    assert liveness.max_gap_for("receiver:rail-airband", "csx@160.2150") == 45
+    assert liveness.max_gap_for("receiver:traintap-eot", "") == 105
+    assert liveness.max_gap_for("ingest:sdr_files", "") == 35
+    # a receiver that rewrites its file every 5 s says so in channels.local.yaml
+    (cfg_dir / "channels.local.yaml").write_text("receivers:\n  rail-airband: {heartbeat_s: 5}\nchannels: []\n")
+    config_files.clear_cache()
+    assert liveness.receiver_max_gap_s("rail-airband", stats=True) == 35          # 5 + 15 + 15
+    (cfg_dir / "channels.local.yaml").write_text("receivers:\n  rail-airband: {heartbeat_s: -1}\nchannels: []\n")
+    config_files.clear_cache()
+    with pytest.raises(ValueError):
+        liveness.receiver_max_gap_s("rail-airband", stats=True)
+
+
+def test_a_short_receiver_outage_ends_the_run(db, status_dir):
+    """rtl_airband's stats file every 15 s with a 130 s hole, traintap's heartbeat every minute
+    with a 120 s hole: each hole ends the run, so the receiver is listening only since it came
+    back. Normal jitter (a beat 65 s after the last for traintap, 30 s for a skipped stats
+    rewrite) doesn't."""
+    prom = status_dir / "rail-airband.prom"
+    prom.write_text('channel_activity_counter{freq="160.215",label="csx_road"}\t0\n')
+    for ago in list(range(2400, 999, -15)) + [970] + list(range(870, -1, -15)):     # 970: one rewrite skipped
+        _observe(db, prom, "rail-airband", ago)
+    runs = _runs(db, "receiver:rail-airband")
+    assert len(runs) == 2
+    assert abs(runs[1][0].timestamp() - (time.time() - 870)) < 2
+    hb = status_dir / "traintap-eot.heartbeat"
+    hb.write_text("")
+    for ago in list(range(2400, 999, -60)) + [935] + list(range(815, -1, -60)):     # 65 s, then a 120 s hole
+        _observe(db, hb, "traintap-eot", ago)
+    runs = _runs(db, "receiver:traintap-eot")
+    assert len(runs) == 2 and abs(runs[1][0].timestamp() - (time.time() - 815)) < 2
+
+
+def test_rtl_airband_counters_that_went_down_are_a_restart(db, status_dir):
+    """rtl_airband restarted between two 15 s rewrites (no gap to see): its counters started again
+    at 0, so the run ends there. A read mid-rewrite (lines missing, the last one cut off) proves
+    nothing either way."""
+    prom = status_dir / "rail-airband.prom"
+
+    def stats(activity: int, squelch: int, tail: str = "") -> str:
+        return (f'channel_activity_counter{{freq="160.215",label="csx_road"}}\t{activity}\n'
+                f'channel_noise_level{{freq="160.215",label="csx_road"}}\t3.2\n'
+                f'channel_squelch_counter{{freq="160.215",label="csx_road"}}\t{squelch}\n'
+                f'buffer_overflow_count{{device="0"}}\t0\n' + tail)
+
+    prom.write_text(stats(900, 40))
+    _observe(db, prom, "rail-airband", 120)
+    prom.write_text(stats(950, 41))
+    _observe(db, prom, "rail-airband", 105)
+    # mid-rewrite: only the first line, then a counter cut off at "4" (it was 41): no restart
+    cut = 'channel_squelch_counter{freq="160.215",label="csx_road"}\t4'
+    prom.write_text(stats(960, 41).split("\n")[0] + "\n" + cut)
+    _observe(db, prom, "rail-airband", 90)
+    assert len(_runs(db, "receiver:rail-airband")) == 1
+    with db.connect() as c:
+        detail = c.execute(text("SELECT detail FROM liveness WHERE component = 'receiver:rail-airband'")).scalar()
+    assert detail["counters"] == {'channel_activity_counter{freq="160.215",label="csx_road"}': 960,   # the
+                                  'channel_squelch_counter{freq="160.215",label="csx_road"}': 41}    # run's highest
+    prom.write_text(stats(970, 42))
+    _observe(db, prom, "rail-airband", 75)
+    prom.write_text(stats(3, 0))                          # 15 s later: counters back near 0
+    _observe(db, prom, "rail-airband", 60)
+    runs = _runs(db, "receiver:rail-airband")
+    assert len(runs) == 2 and abs(runs[1][0].timestamp() - (time.time() - 60)) < 2
+    # the API reads the file itself too: a reset the ingest stage hasn't recorded yet breaks the
+    # current run as well
+    from core.receivers import read_heartbeat
+    with db.connect() as c:
+        run = liveness.runs_since(c, ["receiver:rail-airband"],
+                                  datetime.now(timezone.utc) - timedelta(hours=1))["receiver:rail-airband"][0]
+    t = time.time() - 50
+    for body, continues in ((stats(5, 1), True), (stats(1, 0), False)):
+        prom.write_text(body)
+        os.utime(prom, (t, t))
+        assert liveness.file_continues(run, read_heartbeat("rail-airband"), 45) is continues
+    os.utime(prom, (t - 30, t - 30))                                   # not newer than the run's last beat
+    assert liveness.file_continues(run, read_heartbeat("rail-airband"), 45) is None
+    assert liveness.file_continues(run, None, 45) is None
+
+
 # ── api/rail_verdicts.py (no database) ───────────────────────────────────────
 
 W0, W1 = T0, T0 + timedelta(minutes=30)
 ROAD = Channel(id="road", label="Road", kind="rail_voice", freq_mhz=160.215)
 YARD = Channel(id="yard", label="Yard", kind="rail_voice", freq_mhz=160.95)
-OK = V.IngestProof("sdr_files", up_since=W0 - timedelta(hours=1))
+OK = V.IngestProof("sdr_files", up_since=W0 - timedelta(hours=1), checked_at=W1 - timedelta(seconds=4))
 
 
 def _p(ch, covers=True, state="online", since=W0 - timedelta(hours=1), **kw) -> V.ChannelProof:
+    kw.setdefault("heard_until", W1 - timedelta(seconds=9) if since else None)
     return V.ChannelProof(ch=ch, covers=covers, receiver_state=state, listening_since=since,
                           listened_in_window=state == "online", **kw)
 
@@ -116,7 +212,9 @@ def test_verdict_states():
     quiet = V.build("rail_voice", [_p(ROAD), _p(YARD, covers=False, since=None, state="not_installed")], {}, OK,
                     W0, W1)
     assert quiet["state"] == "quiet" and quiet["listening_since"] == "2026-11-14T11:00:00Z"
-    assert quiet["window_start"] == "2026-11-14T12:00:00Z" and quiet["window_end"] == "2026-11-14T12:30:00Z"
+    # the quiet claim ends at the earliest of the receiver's newest heartbeat and the ingest's last check
+    assert quiet["window_start"] == "2026-11-14T12:00:00Z" and quiet["window_end"] == "2026-11-14T12:29:51Z"
+    assert "up to 2026-11-14T12:29:51Z (9 s before this answer" in quiet["reasons"][0]
     assert quiet["channels"] == [
         {"feed_id": "road", "receiver_state": "online", "covers_point": True,
          "listening_since": "2026-11-14T11:00:00Z"},
@@ -150,3 +248,19 @@ def test_verdict_states():
                    {}, OK, W0, W1)
     assert many["reasons"] == ["c0, c1, c2: no heartbeat history shows the receiver listening for the whole window"]
     assert set(V.STATES) == {"activity", "quiet", "not_covered", "unknown"}
+    # heard only through a channel that doesn't cover the point; a frequency filed under a disabled one
+    via = V.build("rail_voice", [_p(ROAD, via_uncovered=["far_road"])], {}, OK, W0, W1)
+    assert via["state"] == "unknown" and via["reasons"] == [
+        "road: the receiver records this channel's frequency as far_road, which doesn't cover this point, so those "
+        "recordings don't count here"]
+    dropped = V.build("rail_voice", [_p(ROAD, since=None, state="not_installed", problem="files it under old")], {},
+                      OK, W0, W1)
+    assert dropped["state"] == "not_covered" and "road: files it under old" in dropped["reasons"]
+    # no record of where the proof ends: never quiet
+    assert V.build("rail_voice", [_p(ROAD, heard_until=None)], {}, OK, W0, W1)["state"] == "unknown"
+    assert V.build("rail_voice", [_p(ROAD)], {}, V.IngestProof("sdr_files", up_since=W0 - timedelta(hours=1)),
+                   W0, W1)["state"] == "unknown"
+    stale = V.build("rail_voice", [_p(ROAD)], {}, V.IngestProof("sdr_files", last_beat=W1 - timedelta(minutes=2)),
+                    W0, W1)
+    assert stale["reasons"] == ["ingest (sdr_files) has no current heartbeat (its last beat was at "
+                                "2026-11-14T12:28:00Z)"]

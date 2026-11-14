@@ -35,6 +35,12 @@ channels:
   - id: tg_ch
     label: Trunked talkgroup
     talkgroups: [9101]
+  - id: off_rail
+    label: Retired rail channel
+    kind: rail_road
+    templates: [off_rail]
+    freq_mhz: 160.95
+    enabled: false
 """
 
 
@@ -230,6 +236,48 @@ def test_sdr_watcher_beats_with_its_receivers_and_what_is_recording_now(db, chan
     assert src.poll_once() == 2 and src.recording_now == {}
     assert src.maybe_beat(force=True) is True
     assert _liveness(db)["ingest:sdr_files"][1]["recording_now"] == {}
+
+
+def test_sdr_watcher_beats_at_once_when_a_transmission_starts(db, channels, tmp_path, monkeypatch):
+    """The watcher polls every second but beats every INGEST_HEARTBEAT_S (15 s): a transmission
+    that starts in between is reported by the next poll's beat, not up to 15 s later. Each beat is
+    stamped with when its poll began (how far the ingest stage has looked), and a dropped rail
+    recording (a disabled rail channel) is reported at once too."""
+    import threading
+
+    from core.settings import reset_settings_cache
+    monkeypatch.setenv("RECEIVER_STATUS_DIR", str(tmp_path / "receivers"))
+    reset_settings_cache()
+    watch = tmp_path / "sdr"
+    watch.mkdir()
+    src = SdrFileSource(watch_dir=watch, min_age_s=1.5)
+    stop = threading.Event()
+    t = threading.Thread(target=src.run, args=(stop, 0.2), daemon=True)
+    t.start()
+
+    def detail_within(seconds: float, pred) -> dict | None:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            row = _liveness(db).get("ingest:sdr_files")
+            if row and pred(row[1]):
+                return row[1]
+            time.sleep(0.1)
+        return None
+
+    try:
+        assert detail_within(5, lambda d: d.get("recording_now") == {}) is not None
+        (watch / "rail_road_20261114_153300_160215000.mp3.tmp").write_bytes(b"ID3partial")
+        assert detail_within(4, lambda d: d.get("recording_now") == {"test_rail": 1}) is not None
+        (watch / "off_rail_20261114_153400_160950000.mp3").write_bytes(b"ID3" + b"\0" * 50)
+        _old(watch / "off_rail_20261114_153400_160950000.mp3")
+        d = detail_within(4, lambda d: "dropped" in d)
+        assert d is not None and d["dropped"] == {"off_rail": {"n": 1, "last": "2026-11-14T15:34:00Z"}}
+    finally:
+        stop.set()
+        t.join(5)
+    with db.connect() as c:
+        last = c.execute(text("SELECT last_seen FROM liveness WHERE component = 'ingest:sdr_files'")).scalar()
+    assert last <= src.checked_at                                     # a poll's start, never later
 
 
 def test_traintap_beats_only_while_it_can_see_the_csv(db, tmp_path, monkeypatch):
