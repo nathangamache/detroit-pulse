@@ -1,0 +1,47 @@
+--- a/deploy/docker-compose.yml
++++ b/deploy/docker-compose.yml
+@@ -150,6 +150,9 @@
+         ipv4_address: 172.30.77.20
+         # cloudflared reaches the gateway's PUBLIC listener as http://gateway:7700.
+         aliases: [gateway]
++      # Detroit Pulse: the gateway shares this namespace and reaches http://pulse-api:7710 here.
++      # Internal network (no egress); only pulse-api and this sidecar are on it.
++      godseye_backend: {}
+ 
+   gateway:
+     <<: *hardening
+@@ -181,11 +184,15 @@
+       # Only cloudflared's fixed address may set CF-Connecting-IP.
+       TRUSTED_PROXY_IPS: 172.30.77.10
+       PULSE_URL: ${PULSE_URL:-http://pulse-api:7710}
++      # Pulse UI: static build that Pulse's pulse-frontend service copies into pulse_frontend
++      PULSE_STATIC_DIR: /pulse-ui
++      PULSE_API_PROXY: "true"
+       HOME: /tmp
+       UV_THREADPOOL_SIZE: "4"
+     env_file: [./secrets/gateway.env]
+     volumes:
+       - gateway-data:/data
++      - pulse-ui:/pulse-ui:ro
+     tmpfs: ["/tmp:size=64m,mode=1777"]
+     mem_limit: 768m
+     memswap_limit: 768m
+@@ -217,6 +224,10 @@
+   gev-cache:
+   gev-logs:
+   gev-dotcache:
++  # created by detroit-pulse/deploy/setup.sh, filled by Pulse's pulse-frontend service
++  pulse-ui:
++    external: true
++    name: pulse_frontend
+ 
+ networks:
+   godseye:
+@@ -225,3 +236,7 @@
+     ipam:
+       config:
+         - subnet: 172.30.77.0/24
++  # created by detroit-pulse/deploy/setup.sh (docker network create --internal godseye_backend)
++  godseye_backend:
++    external: true
++    name: godseye_backend

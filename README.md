@@ -81,6 +81,19 @@ uv run python run_pipeline.py --stages ingest,extract --sources fixture   # demo
 
 Gateway side (`godseye-detroit-connector`): `PULSE_URL=http://127.0.0.1:7710`, the same
 `PULSE_API_TOKEN`, `PULSE_STATIC_DIR=<repo>/frontend/dist`, `PULSE_API_PROXY=true`.
+
+### In containers (godseye stack)
+
+```bash
+cd deploy && ./setup.sh --from-dotenv ../.env     # internal network, volumes, mode-600 secrets
+docker-compose -p pulse build && docker-compose -p pulse up -d
+```
+
+Hardened containers (non-root, read-only roots, no capabilities, limits, no published ports):
+pulse-api on the `godseye_backend` network as `http://pulse-api:7710`, two pipeline workers,
+PostGIS and Redis on the existing data volumes, optional UI volume for the gateway, and an `sdr`
+profile for rtl_airband/traintap. The connector needs a small compose change (a patch, not yet
+applied). Everything is in [docs/godseye-integration.md](docs/godseye-integration.md).
 For UI development, `cd frontend && npm run dev` proxies `/pulse/api` to the local API.
 
 ## Tests and evals
@@ -123,5 +136,6 @@ its own spend meter.
 | `api/` | FastAPI app: `/v1` gateway contract, UI routes, admin, WebSocket |
 | `db/` | ORM models, alembic migrations, `schema.sql` reference |
 | `frontend/` | React + MapLibre UI (Vite, base `/pulse/`) |
-| `scripts/` | archive restore, FCC ULS import, few-shot builder, geocoder index build, prefilter/extraction/geocoder evals |
+| `scripts/` | archive restore, FCC ULS import, few-shot builder, geocoder index build, rail.conf renderer, prefilter/extraction/geocoder evals |
+| `deploy/` | container stack: Dockerfiles, compose (+ verify override), setup script, SDR configs, secrets README |
 | `lora/` | legacy QLoRA/Ollama tooling from the GPU era; not used by this pipeline and its dependencies aren't installed |
