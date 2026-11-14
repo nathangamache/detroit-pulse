@@ -7,9 +7,11 @@ as `not_installed` ([6](#6-receiver-heartbeats), [7](#7-from-not_installed-to-li
 
 ```
 RTL-SDR #1 ── rtl_airband (multichannel NFM, split_on_transmission) ──▶ data/sdr/…/<template>_<time>.mp3
-           └─ stats file every 15 s ─────────────────────────────────▶ data/receivers/rail-airband.prom
+           ├─ stats file every 15 s ─────────────────────────────────▶ data/receivers/rail-airband.prom
+           └─ start marker, written before every start ──────────────▶ data/receivers/rail-airband.started
 RTL-SDR #2 ── traintap (EOT 457.9375 / HOT 452.9375 MHz) ──────────────▶ data/traintap/trains.csv
-           └─ heartbeat every ~60 s ─────────────────────────────────▶ data/receivers/traintap-eot.heartbeat
+           ├─ heartbeat every ~60 s ─────────────────────────────────▶ data/receivers/traintap-eot.heartbeat
+           └─ start marker, written before every start ──────────────▶ data/receivers/traintap-eot.started
                                                                               │
                      INGEST_SOURCES=sdr_files,traintap  (run_pipeline.py --stages ingest)
                      /v1/feeds/status reads data/receivers (RECEIVER_STATUS_DIR)
@@ -180,8 +182,10 @@ to the batch call, whose `rail.detector` fills the gaps (`parse_source = llm`).
 * `tests/test_receivers.py` covers heartbeats, receiver states, coverage and
   `coverage_summary` without a database; `tests/test_api.py` checks "no receiver" vs "quiet"
   end to end; `tests/test_verdicts.py` checks each rule of the `verdicts` proof (coverage
-  radius, listening for the whole window, frequency, ingest heartbeat, nothing heard), and
-  `tests/test_liveness.py` the heartbeat history itself.
+  radius, listening for the whole window, restarts only the start markers show, frequency,
+  ingest heartbeat, squelch openings that never became recordings, nothing heard),
+  `tests/test_liveness.py` the heartbeat history itself, and `tests/test_deploy.py` that both
+  entrypoints write the start marker before the receiver starts.
 * `INGEST_SOURCES=fixture` replays `tests/fixtures/transmissions.jsonl` (synthetic text)
   through the whole pipeline: `uv run python run_pipeline.py --stages ingest,extract --sources fixture`.
 * To test audio end to end, drop any mp3/wav named like `rail_road_20261114_153012.mp3`
@@ -200,8 +204,20 @@ and `coverage_summary` ([pulse-api.md](pulse-api.md#feeds_status)). The files li
 | receiver | file | written by | how often |
 |---|---|---|---|
 | `rail-airband` | `rail-airband.prom` | rtl_airband's stats file: `stats_filepath = "/status/rail-airband.prom";` (global, in `deploy/sdr/rail.conf`) | every `stats_update_interval` (15 s) while the dongle delivers samples |
+| | `rail-airband.started` | the container's entrypoint (`deploy/docker-compose.yml`) | once, before every start |
 | `traintap-eot` | `traintap-eot.heartbeat` (or `heartbeat` next to `TRAINTAP_CSV`) | traintap `--heartbeat` | about once a minute while its decode loop runs |
-| any other name a channel sets with `receiver:` | `<name>.prom` (rtl_airband stats format) or `<name>.heartbeat` (any file touched periodically) | you | well under `RECEIVER_STALE_S` |
+| | `traintap-eot.started` | `deploy/sdr/traintap_by_serial.py --started` | once, before every start |
+| any other name a channel sets with `receiver:` | `<name>.prom` (rtl_airband stats format) or `<name>.heartbeat` (any file touched periodically), and `<name>.started` | you | heartbeat well under `RECEIVER_STALE_S`; marker before every start |
+
+* The start marker (`<name>.started`) holds a boot id that is new at every start (and the
+  time), written through a temp file and a rename before the receiver itself runs. A
+  heartbeat can't show every restart: traintap touches its heartbeat as soon as it starts and
+  the touch carries nothing else, and rtl_airband's counters may all still be 0 (before the
+  first squelch opening since it last started, e.g. in a crash loop or after two quick
+  redeploys). A new boot id ends the receiver's liveness run (section 8), and a receiver that
+  writes no marker never makes a window quiet. Both entrypoints refuse to start the receiver
+  when they can't write the marker, since a stale one would hide that restart. `/v1/feeds/status`
+  doesn't use it.
 
 * Only the file's modification time matters; a heartbeat older than `RECEIVER_STALE_S`
   (default 300 s) means `offline`. A missing file (and no recordings / packets for the
@@ -250,7 +266,9 @@ instead of "quiet". When the SDRs arrive:
      shows `serial EOT457 is device index N`.
    * `docker run --rm --network none -v pulse_receivers:/v:ro --entrypoint ls detroit-pulse:0.2.0 -lan --time-style=+%T /v`
      lists `rail-airband.prom` (rewritten every 15 s) and `traintap-eot.heartbeat`, and `.`
-     as `10010 10030` with mode `drwxrwsr-x`.
+     as `10010 10030` with mode `drwxrwsr-x`. It also lists `rail-airband.started` and
+     `traintap-eot.started` (a boot id and the start time each), rewritten at every container
+     start.
    * `GET /v1/feeds/status` (through the gateway, or the `debug` profile):
      `receiver.state` is `online` for the rail and eot feeds and `coverage_summary` reads
      `{"rail_radio": "listening", "eot": "listening", ...}`, even before anyone transmits.
@@ -261,7 +279,13 @@ instead of "quiet". When the SDRs arrive:
    channel list: re-render `rail.local.conf` and restart `rail-airband`. If everything
    stays `not_installed`, the stats file isn't being written: check `docker logs rail-airband`
    for "Cannot open output file /status/rail-airband.prom" and that the volume is
-   `pulse:pulse-sdr 2775` ([godseye-integration.md](godseye-integration.md#sdr)).
+   `pulse:pulse-sdr 2775` ([godseye-integration.md](godseye-integration.md#sdr)). If a
+   receiver doesn't start at all, its log says whether it couldn't write its start marker.
+6. If `verdicts.rail_voice.reasons` says "the receiver opened squelch N times on <channel> in
+   the window but no recording reached Pulse", rtl_airband has turned that channel's file output
+   off: `docker logs rail-airband` shows "Output disabled" or "Cannot write ..., output
+   disabled". Fix the cause (free disk space, the `pulse_sdr` volume's and its dated
+   subdirectories' owner and mode), then restart `rail-airband`.
 
 ## 8. Heartbeat history and the ingest heartbeat
 
@@ -284,9 +308,26 @@ turns its files and packets into rows did too. The ingest stage records both, in
   transmission starts or ends or a recording is dropped, not only every 15 s.
 * With each beat it records its receivers' heartbeat files (`receiver:<name>`; `sdr_files`:
   the receivers of every enabled voice channel, `traintap`: the eot channels'): the file's
-  mtime, and for rtl_airband the label/frequency pairs it lists and its counters.
+  mtime, the start marker's boot id, and for rtl_airband the label/frequency pairs it lists
+  and its counters. A heartbeat older than the start marker was written by the process before
+  the restart, and is not recorded.
+* For rtl_airband it also records, per sample and channel, how many times the squelch opened
+  since the previous sample (`channel_squelch_counter`), how many of those transmissions it
+  dropped as shorter than `split_tx_drop_shorter_than` (`channel_split_tx_dropped_counter`) and
+  for how many output loops the squelch was open (`channel_activity_counter`), in
+  `receiver_squelch`; after a restart, how many since it started. While the channel's file
+  output works, every other opening starts or continues a recording, and the squelch is never
+  open without one being written. rtl_airband v7.0.1 (`src/output.cpp` `process_outputs`)
+  turns a file output off for good after one failed open ("Output disabled") or short write
+  ("Cannot write ..., output disabled": a full disk, a permission problem on `pulse_sdr` or its
+  dated subdirectories) while it keeps demodulating and rewriting its stats file, so its
+  counters show traffic Pulse never gets. A covering channel with no recording at all in the
+  window whose squelch opened in it (more often than it dropped), or was open in it with no
+  opening and no drop (a transmission that began before the window), is `unknown`, never quiet,
+  until rtl_airband is restarted (after fixing the cause).
 * Beats form runs (`up_since` .. `last_seen`). A beat extends the newest run when nothing
-  changed and it comes within that component's own max gap of the last one:
+  changed (the start marker included) and it comes within that component's own max gap of the
+  last one:
 
   | component | beats | max gap |
   |---|---|---|
@@ -296,19 +337,23 @@ turns its files and packets into rows did too. The ingest stage records both, in
 
   (a receiver: its interval, plus the ingest stage's sampling, plus half the interval, at
   least 15 s; set another interval per receiver with `receivers: {<name>: {heartbeat_s: N}}`
-  in `channels.local.yaml`). A longer gap, a receiver that stopped rewriting its file, an
-  rtl_airband counter that went down (a restart, however quickly it came back), a different
-  channel list (a re-render restarts rtl_airband) or a blind beat starts a new run. So a
-  receiver or ingest stage that was down during the window, or came back in it, is "listening
-  only since" its new run began. What can't be seen is an outage that fits between two beats
-  within the max gap with no restart in it (rtl_airband: up to about 30 s; traintap: up to
-  about 45 s). Runs older than `LIVENESS_KEEP_DAYS` (3) are deleted.
+  in `channels.local.yaml`). A longer gap, a receiver that stopped rewriting its file, a new
+  start marker (a restart, however quickly it came back), an rtl_airband counter that went
+  down, a different channel list (a re-render restarts rtl_airband) or a blind beat starts a
+  new run. So a receiver or ingest stage that was down during the window, or came back in it,
+  is "listening only since" its new run began. What can't be seen is a receiver that stalls
+  without restarting (alive, writing nothing) and carries on within its max gap: counted from
+  its last write, up to about 45 s for rtl_airband and about 105 s for traintap (a stall that
+  starts right after a touch and ends just before the max gap). Runs and squelch samples older
+  than `LIVENESS_KEEP_DAYS` (3) are deleted.
 * A quiet window ends where the proof ends (`window_end`): at the ingest stage's newest beat
   and the covering receivers' newest heartbeats, whichever is earliest, never at the request
   time. An ingest stage that missed two beats (35 s) has no current heartbeat: `unknown`.
 
 The ingest stage runs in `pulse-transcribe`, which mounts `pulse_receivers` read-only at
 `/data/receivers` for this. After deploying a Pulse with this change (the image, the
-`liveness` migration and that mount), `quiet` becomes possible only once the history is as
-long as the window asked about; until then, and whenever pulse-transcribe is stopped, the
-answer is `unknown` with a reason, never `quiet`.
+`liveness` and `receiver_squelch` migrations, that mount, and the receivers' entrypoints that
+write the start markers: `up -d` recreates both SDR containers, which is itself a restart),
+`quiet` becomes possible only once the history is as long as the window asked about; until
+then, and whenever pulse-transcribe is stopped, the answer is `unknown` with a reason, never
+`quiet`.

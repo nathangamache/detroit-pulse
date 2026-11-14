@@ -9,6 +9,7 @@ Table roles:
   geocode_cache       results from the $0 geocoders, with the provider that answered
   pipeline_events     cap hits, degradations, source health
   liveness            receiver and ingest heartbeat runs (core/liveness.py), for rail verdicts
+  receiver_squelch    squelch openings per receiver stats sample and channel, for rail verdicts
 Legacy tables kept for the archive: shadow_log, pipeline_metrics, lora_model_registry.
 """
 from __future__ import annotations
@@ -357,5 +358,19 @@ class Liveness(Base):
     detail = Column(JSONB)
 
 
+class ReceiverSquelch(Base):
+    """How a receiver's counters for one channel grew since its previous stats sample (core/liveness.py)."""
+    __tablename__ = "receiver_squelch"
+
+    component = Column(String(120), primary_key=True)
+    at = Column(DateTime(timezone=True), primary_key=True)
+    label = Column(Text, primary_key=True, server_default="")
+    freq_mhz = Column(Float, primary_key=True)
+    opens = Column(Integer, nullable=False, server_default="0")
+    dropped = Column(Integer, nullable=False, server_default="0")
+    active = Column(Integer, nullable=False, server_default="0")
+
+
 Index("ix_llm_usage_ts", LlmUsage.ts)
 Index("ix_liveness_last_seen", Liveness.last_seen)
+Index("ix_receiver_squelch_at", ReceiverSquelch.at)

@@ -17,7 +17,8 @@ import yaml
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from tests.test_api import BOTH_TUNED, NEAR, QUIET, QUIET_RAIL, _beats, _listening, _recording, _states
+from tests.test_api import (BOTH_TUNED, NEAR, QUIET, QUIET_RAIL, _beats, _counters, _listening, _mark, _recording,
+                            _states)
 
 CENTER = (42.25, -83.70)          # the Test Sub center, and the EOT receiver's bias point
 
@@ -30,6 +31,8 @@ def _client(cfg_dir, tmp_path, monkeypatch, channels: dict, rail: dict = QUIET_R
     config_files.clear_cache()
     status = tmp_path / "receivers"
     status.mkdir(parents=True)
+    for name in ("rail-airband", "traintap-eot"):        # both started 6 h ago (deploy/docker-compose.yml)
+        _mark(status, name)
     monkeypatch.setenv("RECEIVER_STATUS_DIR", str(status))
     monkeypatch.setenv("TRAINTAP_CSV", str(tmp_path / "traintap" / "trains.csv"))
     reset_settings_cache()
@@ -273,13 +276,12 @@ def test_an_rtl_airband_restart_inside_the_window_is_never_quiet(quiet):
     client, status, db = quiet
     prom = status / "rail-airband.prom"
 
-    def stats(n: int) -> str:
-        return "".join(f'channel_activity_counter{{freq="{f}",label="{cid}"}}\t{n}\n'
-                       f'channel_squelch_counter{{freq="{f}",label="{cid}"}}\t{n // 10}\n'
+    def stats(n: int) -> str:                      # no squelch opening since it (re)started
+        return "".join(_counters(f, cid, activity=n, squelch=40 if n >= 5000 else 0)
                        for f, cid in (("160.215", "csx_road"), ("160.950", "csx_yard")))
     _listening(db, status, prom=None, ingest=True)
-    for i, ago in enumerate(range(2400, -1, -15)):
-        prom.write_text(stats(5000 + i if ago > 600 else i))         # back to 0 ten minutes ago
+    for ago in range(2400, -1, -15):
+        prom.write_text(stats(5000 if ago > 600 else 3))             # back near 0 ten minutes ago
         _sample(db, prom, "rail-airband", [ago])
     v = _get(client)["verdicts"]["rail_voice"]
     assert v["state"] == "unknown" and any("receiver listening only since" in x for x in v["reasons"])
@@ -291,6 +293,174 @@ def test_an_rtl_airband_restart_inside_the_window_is_never_quiet(quiet):
     os.utime(prom, (t, t))
     v = _get(client, since_minutes=9)["verdicts"]["rail_voice"]
     assert v["state"] == "unknown" and any("receiver listening only since" in x for x in v["reasons"])
+
+
+def _ago(iso: str) -> float:
+    return (datetime.now(timezone.utc) - _t(iso)).total_seconds()
+
+
+def test_a_restart_the_heartbeat_cant_show_is_never_quiet(quiet):
+    """Two restarts 10 minutes ago that the heartbeats alone can't show (the real sampling path,
+    core/liveness.observe_receiver, the ingest stage beating every 15 s throughout):
+    traintap's bare touch every 60 s, its restart leaving touches 600 s and 510 s ago (90 s, under
+    the 105 s max gap); rtl_airband's stats file every 15 s with every counter 0, its restart
+    leaving rewrites 615 s and 585 s ago (30 s). Both were "quiet, listening since 2 h ago". Each
+    entrypoint's start marker shows the restart: listening only since then."""
+    import os
+    import time
+    client, status, db = quiet
+    prom, hb = status / "rail-airband.prom", status / "traintap-eot.heartbeat"
+    prom.write_text(BOTH_TUNED)                                  # every counter 0
+    hb.write_text("")
+    _mark(status, "rail-airband", "air-1", 3 * 3600)
+    _mark(status, "traintap-eot", "tt-1", 3 * 3600)
+    _sample(db, prom, "rail-airband", range(7200, 614, -15))
+    _sample(db, hb, "traintap-eot", range(7200, 599, -60))
+    _mark(status, "rail-airband", "air-2", 600)
+    _mark(status, "traintap-eot", "tt-2", 520)
+    _sample(db, prom, "rail-airband", range(585, -1, -15))
+    _sample(db, hb, "traintap-eot", range(510, -1, -60))
+    _beats(db, "ingest:sdr_files", 120)
+    _beats(db, "ingest:traintap", 120)
+    a = _get(client)
+    assert _states(a) == {"rail_voice": "unknown", "eot": "unknown"}
+    assert "they were quiet" not in a["coverage"]["note"]
+    for kind, back in (("rail_voice", 585), ("eot", 510)):
+        v = a["verdicts"][kind]
+        assert any("receiver listening only since" in x for x in v["reasons"]), kind
+        assert abs(_ago(v["listening_since"]) - back) < 5, kind
+    assert _states(_get(client, since_minutes=8)) == {"rail_voice": "quiet", "eot": "quiet"}
+    # traintap restarts again now and hasn't touched its heartbeat since: not listening at all
+    t = time.time()
+    p = status / "traintap-eot.started"
+    p.write_text("tt-3 now\n")
+    os.utime(p, (t - 2, t - 2))
+    e = _get(client, since_minutes=8)["verdicts"]["eot"]
+    assert e["state"] == "unknown" and "listening_since" not in e["channels"][0]
+    # its first touch: listening only since then (the ingest stage hasn't sampled it yet)
+    os.utime(hb, (t - 1, t - 1))
+    e = _get(client, since_minutes=8)["verdicts"]["eot"]
+    assert e["state"] == "unknown" and abs(_ago(e["channels"][0]["listening_since"]) - 1) < 3
+
+
+def test_a_receiver_without_a_start_marker_is_never_quiet(quiet):
+    """Without its entrypoint's start marker a receiver's restart can't be ruled out (traintap's
+    touch has no counters, rtl_airband's may all be 0): history alone never proves a window."""
+    client, status, db = quiet
+    for p in status.glob("*.started"):
+        p.unlink()
+    prom, hb = status / "rail-airband.prom", status / "traintap-eot.heartbeat"
+    prom.write_text(BOTH_TUNED)
+    hb.write_text("")
+    _sample(db, prom, "rail-airband", range(2400, -1, -15))
+    _sample(db, hb, "traintap-eot", range(2400, -1, -60))
+    _beats(db, "ingest:sdr_files", 40)
+    _beats(db, "ingest:traintap", 40)
+    a = _get(client)
+    assert _states(a) == {"rail_voice": "unknown", "eot": "unknown"}
+    assert "they were quiet" not in a["coverage"]["note"]
+    assert ("csx_road, csx_yard: the receiver writes no start marker (rail-airband.started), so a restart in the "
+            "window can't be ruled out") in a["verdicts"]["rail_voice"]["reasons"]
+    assert any("traintap-eot.started" in x for x in a["verdicts"]["eot"]["reasons"])
+    assert "listening_since" not in a["verdicts"]["rail_voice"]
+
+
+def _history(db, prom, agos, body) -> None:
+    """rtl_airband's stats file rewritten as body(ago) at each of `agos` seconds ago, each sampled
+    by the ingest stage (core/liveness.observe_receiver)."""
+    for ago in agos:
+        prom.write_text(body(ago))
+        _sample(db, prom, "rail-airband", [ago])
+
+
+def test_squelch_openings_that_never_became_recordings_are_not_quiet(quiet):
+    """rtl_airband v7.0.1 (src/output.cpp process_outputs) turns a channel's file output off for
+    good after one failed open or short write (a full disk, a permission problem on the recordings
+    volume) and keeps demodulating and rewriting its stats file. Over the last 30 minutes its
+    squelch counter on csx_road rose 120 -> 125 and its activity counter 5000 -> 5200, but no
+    recording reached Pulse: never quiet (it was). Openings dropped as shorter than
+    split_tx_drop_shorter_than are no recordings, and don't count."""
+    import os
+    import time
+    client, status, db = quiet
+    prom = status / "rail-airband.prom"
+    openings = (1500, 1200, 900, 600, 300)                     # seconds ago
+
+    def body(ago: float, drop: bool = False) -> str:
+        n = sum(1 for o in openings if o >= ago)
+        return (_counters("160.215", "csx_road", 5000 + 40 * n, 120 + n, 7 + (n if drop else 0))
+                + _counters("160.950", "csx_yard", 900, 40, 3))
+    _history(db, prom, range(7200, -1, -15), body)
+    (status / "traintap-eot.heartbeat").write_text("")
+    _sample(db, status / "traintap-eot.heartbeat", "traintap-eot", range(7200, -1, -60))
+    _beats(db, "ingest:sdr_files", 120)
+    _beats(db, "ingest:traintap", 120)
+    a = _get(client)
+    v = a["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown" and v["counts"]["recordings_without_text"] == 0
+    assert any(x.startswith("the receiver opened squelch 5 times on csx_road in the window but no recording "
+                            "reached Pulse") for x in v["reasons"]), v["reasons"]
+    assert "they were quiet" not in a["coverage"]["note"]
+    assert a["verdicts"]["eot"]["state"] == "quiet"
+    assert _get(client, since_minutes=4)["verdicts"]["rail_voice"]["state"] == "quiet"   # after the last one
+    # one recording of csx_road in the window: activity, as always
+    with db.begin() as c:
+        _recording(c, "csx_road", "done", "Q326 copy", 10, "rec-1")
+    assert _get(client)["verdicts"]["rail_voice"]["state"] == "activity"
+    # the same openings, every one dropped as too short: nothing was said
+    with db.begin() as c:
+        c.execute(text("DELETE FROM transcript_chunks"))
+        c.execute(text("DELETE FROM receiver_squelch"))
+        c.execute(text("DELETE FROM liveness WHERE component = 'receiver:rail-airband'"))
+    _history(db, prom, range(7200, -1, -15), lambda ago: body(ago, drop=True))
+    assert _get(client)["verdicts"]["rail_voice"]["state"] == "quiet"
+    # an opening in the stats file read now, after the ingest stage's last sample of it
+    prom.write_text(_counters("160.215", "csx_road", 5300, 126, 12) + _counters("160.950", "csx_yard", 900, 40, 3))
+    t = time.time()
+    os.utime(prom, (t, t))
+    v = _get(client, since_minutes=4)["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown"
+    assert any(x.startswith("the receiver opened squelch 1 time on csx_road in the window") for x in v["reasons"])
+
+
+def test_open_squelch_with_no_recording_is_not_quiet(quiet):
+    """A transmission that began before the window (csx_road's squelch opened 1900 s ago) and went
+    on into it (channel_activity_counter grew until 1700 s ago) adds no opening in the window. With
+    the output working it is a recording in the window (still being written, or stamped before it
+    and ingested in it); with none, rtl_airband didn't record it: never quiet."""
+    client, status, db = quiet
+    prom = status / "rail-airband.prom"
+
+    def body(ago: float) -> str:
+        sq = 125 if ago <= 1900 else 124
+        act = 5000 + max(0, min(1900, 1900 - ago) - max(0, 1700 - ago)) // 15 * 8
+        return _counters("160.215", "csx_road", act, sq, 7) + _counters("160.950", "csx_yard", 900, 40, 3)
+    _history(db, prom, range(7200, -1, -15), body)
+    (status / "traintap-eot.heartbeat").write_text("")
+    _sample(db, status / "traintap-eot.heartbeat", "traintap-eot", range(7200, -1, -60))
+    _beats(db, "ingest:sdr_files", 120)
+    _beats(db, "ingest:traintap", 120)
+    v = _get(client)["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown"
+    assert any(x.startswith("the receiver's squelch was open on csx_road in the window (a transmission that began "
+                            "before it) but no recording reached Pulse") for x in v["reasons"]), v["reasons"]
+    assert _get(client, since_minutes=25)["verdicts"]["rail_voice"]["state"] == "quiet"      # after it ended
+
+
+def test_quiet_needs_the_receivers_squelch_counter(quiet):
+    """Pulse can check that every squelch opening became a recording only from rtl_airband's
+    squelch counter: a stats file without it for a covering channel proves nothing about the
+    recordings (it used to be quiet)."""
+    client, status, db = quiet
+    no_squelch = ('channel_activity_counter{freq="160.215",label="csx_road"}\t0\n'
+                  'channel_activity_counter{freq="160.950",label="csx_yard"}\t0\n')
+    _listening(db, status, no_squelch)
+    v = _get(client)["verdicts"]["rail_voice"]
+    assert v["state"] == "unknown"
+    assert ("csx_road, csx_yard: the receiver's stats file has no squelch counter for this channel, so Pulse can't "
+            "check that what it hears reaches it as recordings") in v["reasons"]
+    _listening(db, status, BOTH_TUNED, eot=False, ingest=False)
+    assert _get(client)["verdicts"]["rail_voice"]["state"] == "quiet"
 
 
 # ── rule 3: the configured frequency ─────────────────────────────────────────────────────

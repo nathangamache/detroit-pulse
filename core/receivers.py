@@ -15,6 +15,12 @@ silent, into RECEIVER_STATUS_DIR (the `pulse_receivers` volume in deploy/docker-
                     runs, so one that went down shows a restart (core/liveness.py).
   <name>.heartbeat  any file the receiver touches periodically: traintap's `--heartbeat`
                     (about once a minute while its decode loop runs).
+  <name>.started    the start marker: a new boot id (and the time) that the receiver's entrypoint
+                    writes, atomically, before every start (deploy/docker-compose.yml, rail-airband;
+                    deploy/sdr/traintap_by_serial.py). A heartbeat can't show every restart
+                    (traintap's touch has no counters, rtl_airband's counters may all still be 0),
+                    the marker does: core/liveness.py ends the run whenever it changes, and
+                    /v1/rail/activity calls nothing quiet through a receiver that writes none.
 
 `traintap-eot` also accepts `heartbeat` next to TRAINTAP_CSV (traintap's own default location).
 
@@ -52,7 +58,17 @@ _METRIC = re.compile(r'^channel_\w+\{freq="([0-9.]+)"(?:,label="([^"]*)")?\}', r
 # its counters (TYPE counter: *_counter, *_count), on complete lines only: a line cut off by a read
 # mid-rewrite must never look like a counter that went down
 _COUNTER = re.compile(r'^(\w+_(?:counter|count))\{([^}\n]*)\}\t(\d+)\n', re.M)
+_CHANNEL_KEY = re.compile(r'^(\w+)\{freq="([0-9.]+)"(?:,label="([^"]*)")?\}$')
 _MAX_STATS_BYTES = 1 << 20
+_MAX_MARKER_BYTES = 4096
+# rtl_airband v7.0.1 (src/output.cpp): squelch openings per channel, the transmissions it then
+# dropped as shorter than split_tx_drop_shorter_than, and the output loops with the squelch open
+# (src/rtl_airband.cpp counts one whenever the channel has signal). Every other opening starts (or
+# continues) a recording, and the squelch is never open without one being written, while that
+# channel's file output works.
+SQUELCH_COUNTER = "channel_squelch_counter"
+SPLIT_DROPPED_COUNTER = "channel_split_tx_dropped_counter"
+ACTIVITY_COUNTER = "channel_activity_counter"
 
 # (label or None, frequency in MHz) for each channel a receiver says it demodulates
 Pairs = tuple[tuple[str | None, float], ...]
@@ -130,6 +146,25 @@ def heard_via(pairs: Pairs, ch: Channel, known: dict[str, Channel] | None = None
     return out
 
 
+def heard_pairs(pairs: Pairs, ch: Channel, known: dict[str, Channel] | None = None) -> list[tuple[str | None, float]]:
+    """The receiver channels (label, freq) through which a receiver that says it demodulates
+    `pairs` hears `ch` (heard_via): ch's own label on its frequency, else the lines on its
+    frequency whose recordings are filed under an enabled channel."""
+    mine = [(label, f) for label, f in pairs if label == ch.id]
+    if mine:
+        return [(label, f) for label, f in mine if ch.freq_mhz is None or _freq_ok(f, ch.freq_mhz)]
+    via = heard_via(pairs, ch, known)
+    if not via or ch.freq_mhz is None:
+        return []
+    known = _known(known, ch)
+    out = []
+    for label, f in pairs:
+        c = recorded_as(label, f, known) if _freq_ok(f, ch.freq_mhz) else None
+        if c is not None and c.id in via:
+            out.append((label, f))
+    return out
+
+
 def pairs_cover(pairs: Pairs, ch: Channel, known: dict[str, Channel] | None = None) -> bool:
     """Does a receiver that says it demodulates `pairs` listen to `ch` (heard_via)?"""
     return bool(heard_via(pairs, ch, known))
@@ -166,12 +201,30 @@ def reported_freqs(pairs: Pairs, ch: Channel) -> list[float]:
 
 
 @dataclass(frozen=True)
+class Started:
+    """A receiver's start marker, <name>.started: `boot` is new at every start, `at` is the file's
+    mtime (when that start began, before the receiver itself ran)."""
+    boot: str
+    at: datetime
+
+
+@dataclass(frozen=True)
 class Heartbeat:
     receiver: str
     path: Path
     at: datetime                              # file mtime, UTC
     pairs: Pairs = ()                         # rtl_airband (label, freq MHz) per demodulated channel
     counters: dict[str, int] = field(default_factory=dict, compare=False, hash=False)   # rtl_airband's
+    started: Started | None = field(default=None, compare=False)                      # <name>.started
+
+    @property
+    def boot(self) -> str | None:
+        return self.started.boot if self.started is not None else None
+
+    @property
+    def predates_start(self) -> bool:
+        """The receiver started again after this heartbeat was written: it is the old process's."""
+        return self.started is not None and self.started.at > self.at
 
     @property
     def labels(self) -> frozenset[str]:
@@ -208,6 +261,17 @@ def parse_airband_counters(text: str) -> dict[str, int]:
     return {f"{m[1]}{{{m[2]}}}": int(m[3]) for m in _COUNTER.finditer(text)}
 
 
+def channel_counts(counters: dict[str, int] | None, metric: str) -> dict[tuple[str | None, float], int]:
+    """One per-channel counter of rtl_airband's (`metric`, e.g. SQUELCH_COUNTER), by (label or None,
+    freq MHz) as parse_airband_pairs gives them, from parse_airband_counters' keys."""
+    out: dict[tuple[str | None, float], int] = {}
+    for k, v in (counters or {}).items():
+        m = _CHANNEL_KEY.match(k)
+        if m and m[1] == metric:
+            out[(m[3] or None, round(float(m[2]), 4))] = int(v)
+    return out
+
+
 def parse_airband_stats(text: str) -> tuple[frozenset[str], tuple[float, ...]]:
     pairs = parse_airband_pairs(text)
     return frozenset(label for label, _ in pairs if label), tuple(sorted({f for _, f in pairs}))
@@ -220,8 +284,33 @@ def heartbeat_paths(name: str, s: Settings) -> list[Path]:
     return paths
 
 
+def started_path(name: str, s: Settings) -> Path:
+    return s.receiver_status_dir / f"{name}.started"
+
+
+def read_started(name: str, s: Settings | None = None) -> Started | None:
+    """Receiver `name`'s start marker (its first word is the boot id), or None: none written, or
+    empty (a writer that isn't atomic, read mid-write: that proves no start either)."""
+    s = s or get_settings()
+    p = started_path(name, s)
+    try:
+        st = p.stat()
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        with open(p, "rb") as f:
+            words = f.read(_MAX_MARKER_BYTES).decode("utf-8", "replace").split()
+    except OSError:
+        return None
+    if not words:
+        return None
+    return Started(words[0][:128], datetime.fromtimestamp(st.st_mtime, tz=timezone.utc))
+
+
 def read_heartbeat(name: str, s: Settings | None = None) -> Heartbeat | None:
-    """The newest heartbeat file of receiver `name`, or None if it has never written one."""
+    """The newest heartbeat file of receiver `name`, or None if it has never written one, with its
+    start marker. The marker is read after the heartbeat: a restart between the two reads then
+    shows as a heartbeat that predates its start (the old process's), never as the old marker
+    with the new process's heartbeat."""
     s = s or get_settings()
     best: tuple[Path, float] | None = None
     for p in heartbeat_paths(name, s):
@@ -236,13 +325,13 @@ def read_heartbeat(name: str, s: Settings | None = None) -> Heartbeat | None:
     path, mtime = best
     at = datetime.fromtimestamp(mtime, tz=timezone.utc)
     if path.suffix != ".prom":
-        return Heartbeat(name, path, at)
+        return Heartbeat(name, path, at, started=read_started(name, s))
     try:
         with open(path, "rb") as f:
             body = f.read(_MAX_STATS_BYTES).decode("utf-8", "replace")
     except OSError:
         body = ""
-    return Heartbeat(name, path, at, parse_airband_pairs(body), parse_airband_counters(body))
+    return Heartbeat(name, path, at, parse_airband_pairs(body), parse_airband_counters(body), read_started(name, s))
 
 
 def state_from(last_seen: datetime | None, now: datetime, stale_s: float) -> str:

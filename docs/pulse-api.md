@@ -137,14 +137,21 @@ close, else the latest per-transmission short summary.
      the channel on another frequency).
    * `quiet`, only on positive proof for the **whole** window, all of:
      1. at least one channel of the kind covers the point, and **every** covering channel
-        is proven (2 and 3);
+        is proven (2, 3 and 6);
      2. its receiver was listening since before `window_start`: the receiver's heartbeat
         history (the `liveness` table, [sdr-ingest.md](sdr-ingest.md#8-heartbeat-history-and-the-ingest-heartbeat))
-        shows one unbroken run from before `window_start` to now, and its heartbeat file
-        agrees right now. A run breaks at a gap longer than a missed beat or two of that
-        receiver (45 s for rtl_airband's 15 s stats file, 105 s for traintap's minute) and
-        at an rtl_airband counter that went down (a restart). A receiver that came back
-        during the window is listening only since then;
+        shows one unbroken run from before `window_start` to now, and its heartbeat file and
+        start marker agree right now. A run breaks at a gap longer than a missed beat or two
+        of that receiver (45 s for rtl_airband's 15 s stats file, 105 s for traintap's
+        minute), at an rtl_airband counter that went down, and at every restart, however
+        quickly it came back: the receiver's entrypoint writes a start marker
+        (`<name>.started`, a new boot id) before each start, and a different one ends the run.
+        A receiver that writes no start marker never proves a window (its restarts can't all
+        be seen: traintap's heartbeat is a bare touch, rtl_airband's counters may all be 0).
+        A receiver that came back during the window is listening only since then. What a
+        heartbeat can't show is a receiver that stalls without restarting for less than its
+        max gap, counted from its last write: up to about 45 s (rtl_airband) or 105 s
+        (traintap);
      3. the receiver demodulates the configured frequency and files it under a channel that
         covers the point: its stats file names the channel (label = channel id) with the
         channel's `freq_mhz` within 3 kHz, during that run and now, or the frequency is
@@ -159,7 +166,25 @@ close, else the latest per-transmission short summary.
         (`unmapped:*`) or that the ingest stage dropped because its channel is disabled, no
         recording ingested in the window but stamped before it (a transmission across the
         window start, or `SDR_FILENAME_TZ` not matching rtl_airband's file names), no
-        detector readout without a channel, no packet that no configured eot channel claims.
+        detector readout without a channel, no packet that no configured eot channel claims;
+     6. rail voice: the receiver heard nothing Pulse didn't get. rtl_airband's stats file
+        counts each channel's squelch openings (`channel_squelch_counter`), the transmissions
+        it dropped as shorter than `split_tx_drop_shorter_than`
+        (`channel_split_tx_dropped_counter`) and the output loops with the squelch open
+        (`channel_activity_counter`). While a channel's file output works, every opening it
+        doesn't drop starts or continues a recording, and the squelch is never open without
+        one being written. rtl_airband turns a channel's file output off for good after one
+        failed open or short write (a full disk, the recordings volume's permissions) and
+        keeps demodulating. The ingest stage records how those counters grew at each sample
+        (`receiver_squelch`), and the stats file read now adds what it counted since; a
+        covering channel with no recording at all in the window (with text or not, still being
+        written, or stamped before the window) is `unknown` when, in the window, its squelch
+        opened more often than it dropped ("the receiver opened squelch N times on <channel>
+        in the window but no recording reached Pulse"), or was open with no opening and no
+        drop ("the receiver's squelch was open on <channel> in the window (a transmission that
+        began before it) but no recording reached Pulse"). Quiet also needs the squelch
+        counter: a stats file without it for a covering channel, or a plain heartbeat, can't
+        show this, and the channel isn't proven.
 
      The quiet claim then covers `window_start` to `window_end`, which is **not** the request
      time but where the proof ends: the ingest stage's newest beat (stamped with when its
@@ -172,7 +197,10 @@ close, else the latest per-transmission short summary.
      `sdr_files` beats at once when a transmission starts, so a transmission after
      `window_end` shows up within seconds.
    * `unknown`: nothing was heard, but one of those isn't shown; `reasons` says which
-     (e.g. "receiver listening only since …, after the window start", "ingest (sdr_files) has
+     (e.g. "receiver listening only since …, after the window start", "the receiver writes no
+     start marker (traintap-eot.started), so a restart in the window can't be ruled out",
+     "the receiver opened squelch 5 times on csx_road in the window but no recording reached
+     Pulse (…)", "ingest (sdr_files) has
      no current heartbeat", "the receiver reports this channel on 161.1 MHz, not the
      configured 160.215 MHz").
 

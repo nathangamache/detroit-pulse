@@ -168,3 +168,98 @@ def test_render_rail_conf_selects_in_band_rail_channels():
     assert R.MARKER not in out.split("# Channel block")[0]
     empty, used0, _ = R.render(template, [])
     assert not used0 and R.MARKER in empty
+
+
+def test_rail_airband_writes_a_start_marker_before_it_starts(tmp_path):
+    """A restart rtl_airband's stats file can't show (every counter still 0) must still end its
+    liveness run: the entrypoint writes /status/rail-airband.started, a new boot id and the time,
+    through a temp file and a rename, before it execs rtl_airband (docs/sdr-ingest.md#8). Run with
+    /bin/sh here (the image's busybox sh runs the same POSIX script), /status in a temp dir and
+    rtl_airband replaced by printing the marker it would start with."""
+    import re
+    import subprocess
+    from datetime import datetime
+    ep = _compose()["services"]["rail-airband"]["entrypoint"]
+    assert ep[:4] == ["/sbin/tini", "--", "/bin/sh", "-c"] and len(ep) == 5
+    script = ep[4].replace("$$", "$")                      # compose's escape for a literal $
+    assert script.index("/status/rail-airband.started") < script.index("exec /app/rtl_airband -F -e -c ")
+    run = script.replace("/status/", f"{tmp_path}/").replace(
+        "exec /app/rtl_airband -F -e -c /app/rtl_airband.conf", f"exec cat {tmp_path}/rail-airband.started")
+    assert run != script and "/app/rtl_airband" not in run
+    boots = []
+    for _ in range(2):
+        out = subprocess.run(["/bin/sh", "-c", run], capture_output=True, text=True, check=True, timeout=10).stdout
+        boot, at = out.split()
+        assert re.fullmatch(r"[0-9a-f-]{36}", boot) and datetime.fromisoformat(at.replace("Z", "+00:00"))
+        boots.append(boot)
+    assert boots[0] != boots[1]                                # every start: a new boot id
+    assert [p.name for p in tmp_path.iterdir()] == ["rail-airband.started"]   # no temp file left behind
+    # a marker it can't write stops the start (the receiver never runs with a stale marker)
+    (tmp_path / "rail-airband.started").unlink()
+    tmp_path.chmod(0o500)
+    try:
+        r = subprocess.run(["/bin/sh", "-c", run], capture_output=True, text=True, timeout=10)
+    finally:
+        tmp_path.chmod(0o700)
+    assert r.returncode != 0 and r.stdout == ""
+
+
+def _wrapper():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("traintap_by_serial",
+                                                  REPO / "deploy" / "sdr" / "traintap_by_serial.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_traintap_writes_a_start_marker_before_it_starts(tmp_path, monkeypatch):
+    """traintap's heartbeat is a bare touch with no counters, so only a start marker shows its
+    restarts: its wrapper writes /status/traintap-eot.started (a new boot id and the time,
+    atomically) right before it execs traintap, and refuses to start if it can't."""
+    import re
+    import types
+    svcs = _compose()["services"]
+    ep = svcs["traintap-eot"]["entrypoint"]
+    assert ep[ep.index("--started") + 1] == "/status/traintap-eot.started" and ep[-1] == "--"
+    assert ep.index("--started") < ep.index("--")
+    w = _wrapper()
+    assert w.parse_args(["EOT457", "--started", "/s/x.started", "--", "--mode", "eot"]) == (
+        "EOT457", "/s/x.started", ["--mode", "eot"])
+    assert w.parse_args(["EOT457", "--", "--mode", "eot"]) == ("EOT457", None, ["--mode", "eot"])
+    fake = types.ModuleType("rtlsdr")
+    fake.RtlSdr = types.SimpleNamespace(get_device_index_by_serial=lambda serial: 3,
+                                        get_device_serial_addresses=lambda: ["EOT457"])
+    monkeypatch.setitem(sys.modules, "rtlsdr", fake)
+    marker = tmp_path / "traintap-eot.started"
+    seen = []
+
+    def execvp(prog, args):                                    # traintap starts: the marker is already there
+        seen.append((prog, args, marker.read_text()))
+        raise SystemExit(0)
+    monkeypatch.setattr(w.os, "execvp", execvp)
+    boots = []
+    for _ in range(2):
+        monkeypatch.setattr(sys, "argv", ["traintap_by_serial.py", "EOT457", "--started", str(marker), "--",
+                                          "--mode", "eot", "--heartbeat", "/status/traintap-eot.heartbeat"])
+        try:
+            w.main()
+        except SystemExit as e:
+            assert e.code == 0
+        prog, args, body = seen[-1]
+        assert prog == "traintap" and args == ["traintap", "--device", "3", "--mode", "eot", "--heartbeat",
+                                               "/status/traintap-eot.heartbeat"]
+        boot, at = body.split()
+        assert re.fullmatch(r"[0-9a-f]{32}", boot) and at.endswith("Z")
+        boots.append(boot)
+    assert boots[0] != boots[1] and [p.name for p in tmp_path.iterdir()] == ["traintap-eot.started"]
+    # it can't write the marker: traintap never starts
+    seen.clear()
+    monkeypatch.setattr(sys, "argv", ["traintap_by_serial.py", "EOT457", "--started",
+                                      str(tmp_path / "missing" / "x.started"), "--", "--mode", "eot"])
+    try:
+        w.main()
+        raise AssertionError("expected an exit")
+    except SystemExit as e:
+        assert e.code not in (0, None) and "start marker" in str(e.code)
+    assert seen == []

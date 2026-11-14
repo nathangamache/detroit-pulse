@@ -224,7 +224,10 @@ online, channel quiet" from "no receiver" (`receiver.state`, `coverage_summary`;
 They go into their own small volume, `pulse_receivers`: the SDR containers mount it at `/status`
 (rtl_airband's global `stats_filepath`, traintap's `--heartbeat`), and `pulse-api` and
 `pulse-transcribe` mount it read-only at `/data/receivers` (`RECEIVER_STATUS_DIR`), so the API
-container never sees the recordings. `pulse-transcribe`'s ingest stage records the files'
+container never sees the recordings. Each SDR container's entrypoint also writes a start
+marker there before every start (`rail-airband.started`, `traintap-eot.started`: a new boot id
+and the time), so a restart the heartbeat can't show still counts as one; it refuses to start
+the receiver if it can't. `pulse-transcribe`'s ingest stage records the files'
 history, with its own heartbeat, in the `liveness` table: `/v1/rail/activity` calls a window
 quiet only when that history covers all of it ([sdr-ingest.md §8](sdr-ingest.md#8-heartbeat-history-and-the-ingest-heartbeat)). Nothing gains a network or a port: the SDR containers stay `network_mode: none`. The
 empty volume takes its owner and mode (`pulse:pulse-sdr`, `2775`) from the image's
@@ -273,7 +276,10 @@ after pulling it, rebuild `detroit-pulse:0.2.0` (the image creates `/data/receiv
 and creates the volume. The same holds for the read-only mount on `pulse-transcribe` and the
 `liveness` migration (rail activity verdicts): rebuild, then `up -d` (`pulse-api` runs the
 migration first). Until pulse-transcribe has beaten for as long as the window asked about,
-`verdicts` say `unknown`, never `quiet`.
+`verdicts` say `unknown`, never `quiet`. The same for the start markers and the
+`receiver_squelch` migration (2026-11-14): rebuild, `up -d`, and recreate the SDR containers
+(`--profile sdr up -d rail-airband traintap-eot`) so their entrypoints write the markers;
+until a receiver has one, nothing it hears is called quiet.
 
 `deploy/sdr/rail.conf` (committed) has an **empty channel list**, so no frequencies are in the
 public repo; each rendered channel uses `split_on_transmission`, `include_freq`,

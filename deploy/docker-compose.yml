@@ -12,8 +12,9 @@
 #     frontend        pulse-frontend: one-shot copy of the built UI into the pulse_frontend volume
 #     debug           pulse-debug: 127.0.0.1-only ports 7710/5436/6381 (TCP forwarder)
 #     sdr             rail-airband + traintap-eot on two RTL-SDR Blog V3s (serials RAIL160, EOT457);
-#                     both write a heartbeat into pulse_receivers, which pulse-api (for /v1/feeds/status
-#                     `receiver`) and pulse-transcribe (heartbeat history) read, read-only
+#                     both write a heartbeat, and a start marker before every start, into
+#                     pulse_receivers, which pulse-api (for /v1/feeds/status `receiver`) and
+#                     pulse-transcribe (heartbeat history) read, read-only
 #                     (docs/sdr-ingest.md#6-receiver-heartbeats)
 #
 #   cd deploy
@@ -279,8 +280,21 @@ services:
     init: false                          # the image's entrypoint is already tini
     user: "10020:10030"                  # group pulse-sdr: Pulse reads (and may delete) the files
     group_add: ["${SDR_USB_GID:-46}"]    # plugdev on the host owns /dev/bus/usb/* via udev
-    entrypoint: ["/sbin/tini", "--", "/bin/sh", "-c",
-                 "umask 0002 && exec /app/rtl_airband -F -e -c /app/rtl_airband.conf"]
+    # Before every start, the start marker /status/rail-airband.started (a new boot id and the time,
+    # through a temp file and a rename): a restart its stats file can't show (every counter still 0)
+    # still ends Pulse's liveness run (docs/sdr-ingest.md#8). No marker, no start: a stale one would
+    # hide the restart.
+    entrypoint:
+      - /sbin/tini
+      - --
+      - /bin/sh
+      - -c
+      - >-
+        umask 0002
+        && boot="$$(cat /proc/sys/kernel/random/uuid)" && [ -n "$$boot" ]
+        && printf '%s %s\n' "$$boot" "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /status/.rail-airband.started.tmp
+        && mv -f /status/.rail-airband.started.tmp /status/rail-airband.started
+        && exec /app/rtl_airband -F -e -c /app/rtl_airband.conf
     device_cgroup_rules: ["c 189:* rmw"]
     volumes:
       - /dev/bus/usb:/dev/bus/usb:ro
@@ -302,8 +316,11 @@ services:
     container_name: traintap-eot
     user: "10021:10030"
     group_add: ["${SDR_USB_GID:-46}"]
-    # traintap selects dongles by index only; the wrapper resolves the serial to an index first
-    entrypoint: [python, /opt/pulse/traintap_by_serial.py, "${EOT_SERIAL:-EOT457}", --]
+    # traintap selects dongles by index only; the wrapper resolves the serial to an index first and,
+    # right before it execs traintap, writes the start marker /status/traintap-eot.started (traintap's
+    # heartbeat is a bare touch that can't show a restart; docs/sdr-ingest.md#8)
+    entrypoint: [python, /opt/pulse/traintap_by_serial.py, "${EOT_SERIAL:-EOT457}",
+                 --started, /status/traintap-eot.started, --]
     command: [--mode, eot, --csv, /data/trains.csv, --passes-csv, /data/passes.csv,
               --signal-csv, /data/signal.csv, --heartbeat, /status/traintap-eot.heartbeat]
     environment:
@@ -340,7 +357,8 @@ volumes:
     name: pulse_traintap
   pulse_models:
     name: pulse_models
-  # receiver heartbeats: rail-airband.prom (rtl_airband stats) and traintap-eot.heartbeat
+  # receiver heartbeats: rail-airband.prom (rtl_airband stats) and traintap-eot.heartbeat, and their
+  # start markers rail-airband.started and traintap-eot.started
   pulse_receivers:
     name: pulse_receivers
 

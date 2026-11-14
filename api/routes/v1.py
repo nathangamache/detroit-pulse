@@ -18,10 +18,10 @@ from core.config_files import (RAIL_KINDS, RAIL_VOICE_KINDS, Channel, load_areas
                                norm_line_name)
 from core.db import get_engine
 from core.liveness import (current, file_continues, ingest_component, ingest_max_gap_s, receiver_component,
-                           receiver_max_gap_s, runs_since)
-from core.receivers import (RECEIVER_STATES, ReceiverView, channel_covers_point, channel_matches_hint, coverage_for,
-                            coverage_summary, heard_via, on_railroad, on_subdivision, own_places, pairs_problem,
-                            reported_freqs)
+                           receiver_max_gap_s, runs_since, squelch_deltas)
+from core.receivers import (RECEIVER_STATES, SQUELCH_COUNTER, ReceiverView, channel_counts, channel_covers_point,
+                            channel_matches_hint, coverage_for, coverage_summary, heard_pairs, heard_via, on_railroad,
+                            on_subdivision, own_places, pairs_problem, recorded_as, reported_freqs)
 from core.settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -242,6 +242,27 @@ def _recordings_n(n: int) -> str:
     return f"{n} recording" + ("" if n == 1 else "s")
 
 
+def _times_n(n: int) -> str:
+    return f"{n} time" + ("" if n == 1 else "s")
+
+
+_NO_SQUELCH = "so Pulse can't check that what it hears reaches it as recordings"
+
+
+def _recorder_problem(ch: Channel, hb, run, chans: dict[str, Channel]) -> str | None:
+    """Why Pulse can't check that the receiver's squelch openings on rail voice channel `ch` became
+    recordings (None when it can): that takes rtl_airband's squelch counter for each receiver
+    channel `ch` is heard through, in the file read now or the run's newest sample."""
+    if not hb.is_stats:
+        return f"its receiver writes a plain heartbeat with no squelch counters, {_NO_SQUELCH}"
+    have = set(channel_counts(hb.counters, SQUELCH_COUNTER)) | set(
+        channel_counts(run.detail.get("counters"), SQUELCH_COUNTER))
+    pairs = heard_pairs(hb.pairs or run.pairs, ch, chans)
+    if not pairs or any(p not in have for p in pairs):
+        return f"the receiver's stats file has no squelch counter for this channel, {_NO_SQUELCH}"
+    return None
+
+
 def _unread_note(unread: dict[str, int]) -> str | None:
     """The sentence for recordings in the window that have no text in `transcripts` (still
     queued or transcribing, failed, or whisper found no speech): traffic was heard, so this is
@@ -381,6 +402,16 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
         # poll ingested, so the queries below (each sees all rows committed before it starts) hold
         # everything the newest beat says it has looked at.
         runs = runs_since(c, components, since)
+        # each voice receiver's squelch openings in the window, per receiver channel, from the
+        # samples recorded with that history (read right after it: a sample committed in between
+        # is counted twice below, never missed)
+        voice_receivers = sorted({ch.receiver_name for ch in real_voice_cands if ch.receiver_name})
+        squelch = c.execute(text("""
+            SELECT component, label, freq_mhz, sum(opens) AS opens, sum(dropped) AS dropped, sum(active) AS active
+              FROM receiver_squelch
+             WHERE component = ANY(CAST(:cs AS text[])) AND at >= :since GROUP BY 1, 2, 3"""),
+                            {"cs": [receiver_component(n) for n in voice_receivers], "since": since}
+                            ).mappings().all() if voice_receivers else []
         last_sdr = dict(c.execute(text("""
             SELECT channel_id, max(coalesce(captured_at, "timestamp")) FROM transcript_chunks
              WHERE channel_id = ANY(CAST(:ids AS text[])) AND source = 'sdr_files'
@@ -519,7 +550,8 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
         gap = receiver_max_gap_s(ch.receiver_name, stats, s) if ch.receiver_name else 0.0
         cur = current(rruns, now, gap)
         # listening since the current run began, if that run listened to this channel and the
-        # heartbeat file still agrees right now (the same channel list, counters not reset)
+        # heartbeat file still agrees right now (the same channel list and start marker, counters
+        # not reset)
         hb_ok = hb is not None and hb.covers(ch, chans) and (now - hb.at).total_seconds() <= gap
         since = until = None
         if cur is not None and hb_ok and cur.covers(ch, chans):
@@ -528,8 +560,16 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
                 since, until = cur.up_since, cur.last_seen
             elif cont:
                 since, until = cur.up_since, hb.at
-            else:                       # restarted or re-rendered since the ingest stage last looked
-                since = until = hb.at
+            elif hb.at > cur.last_seen and not hb.predates_start:
+                since = until = hb.at   # restarted or re-rendered since the ingest stage last looked
+            # else: it started again and hasn't written a heartbeat since: not listening
+        # A receiver that writes no start marker can't show every restart (traintap's touch has no
+        # counters, rtl_airband's may all be 0): its history vouches for no window.
+        no_marker = since is not None and hb.boot is None
+        if no_marker:
+            since = until = None
+        recorder = _recorder_problem(ch, hb, cur, chans) if since is not None and ch.kind in RAIL_VOICE_KINDS \
+            else None
         via = heard_via(hb.pairs, ch, chans) if hb is not None and hb.pairs else [ch.id]
         return rail_verdicts.ChannelProof(
             ch=ch, covers=covers, receiver_state=st["state"], last_seen_at=st.get("last_seen_at"),
@@ -537,7 +577,8 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
             listened_in_window=st["state"] == "online" or any(r.covers(ch, chans) for r in rruns),
             reported_freqs=reported_freqs(hb.pairs, ch) if hb is not None else [],
             problem=pairs_problem(hb.pairs, ch, chans) if hb is not None and hb.pairs else None,
-            via_uncovered=[cid for cid in via if cid != ch.id and cid not in covering] if covers else [])
+            via_uncovered=[cid for cid in via if cid != ch.id and cid not in covering] if covers else [],
+            no_marker=no_marker, recorder=recorder)
 
     def has_place(ch: Channel) -> bool:
         return bool(own_places(ch, areas)) or any(on_subdivision(ch, sd) and (sd.center or sd.bbox)
@@ -580,6 +621,44 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
             voice_unattributed.append(f"recordings of the disabled channel {cid} in the window (the newest at "
                                       f"{_iso(last)}) were not ingested: a receiver still records it (re-render "
                                       "rail.local.conf)")
+    # Squelch openings with no recording: rtl_airband (v7.0.1 src/output.cpp process_outputs) turns a
+    # channel's file output off for good after one failed open or short write (a full disk, the
+    # recordings volume's permissions) and keeps demodulating, so its counters show traffic that
+    # never reaches Pulse. While the output works, every opening it doesn't drop as too short
+    # starts or continues a recording, and the squelch is never open without a recording being
+    # written. A covering channel with no recording at all in the window (with text or not, still
+    # being written, or stamped before the window) is never quiet when, in the window, its squelch
+    # opened more often than it dropped transmissions, or was open (channel_activity_counter grew)
+    # with no opening and no drop: a transmission that began before the window. The counts come from
+    # the samples in the window plus, where the stats file read now continues the receiver's run,
+    # what it counted since the ingest stage's last sample of it.
+    opened: dict[str, list[int]] = {}
+    end_rows: list[tuple[str, float, int, int, int]] = []
+    for name in voice_receivers:
+        rcur = current(runs.get(receiver_component(name), []), now, receiver_max_gap_s(name, True, s))
+        rhb = rv.heartbeat(name)
+        if rcur is not None and rhb is not None and rhb.is_stats and \
+                file_continues(rcur, rhb, receiver_max_gap_s(name, True, s)) is True:
+            end_rows += squelch_deltas(rcur.detail.get("counters"), rhb.counters, fresh=False)
+    sampled = [(r["label"], r["freq_mhz"], int(r["opens"]), int(r["dropped"]), int(r["active"])) for r in squelch]
+    for label, f, *grew in sampled + end_rows:
+        rc = recorded_as(label or None, round(float(f), 4), chans)
+        if rc is not None:
+            agg = opened.setdefault(rc.id, [0, 0, 0])
+            for i, n in enumerate(grew):
+                agg[i] += n
+    off_hint = "(rtl_airband may have turned that channel's recordings off after a failed write: check its log)"
+    for cid in sorted(real_ids):
+        o, d, a = opened.get(cid, (0, 0, 0))
+        if sum(by_ch.get(cid, {}).values()) or skewed:
+            continue
+        if o - d > 0:
+            dropped_note = f" (not counting {_times_n(d)} it dropped as too short)" if d else ""
+            voice_unattributed.append(f"the receiver opened squelch {_times_n(o - d)} on {cid} in the window"
+                                      f"{dropped_note} but no recording reached Pulse {off_hint}")
+        elif a > 0 and not o and not d:
+            voice_unattributed.append(f"the receiver's squelch was open on {cid} in the window (a transmission that "
+                                      f"began before it) but no recording reached Pulse {off_hint}")
     voice_proofs = [channel_proof(c, real_voice_ids) for c in real_voice_cands]
     v_voice = rail_verdicts.build("rail_voice", voice_proofs, voice_counts, sdr_ingest, since, now,
                                   voice_unattributed, no_place=[c for c in real_voice_cands if not has_place(c)])

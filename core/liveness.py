@@ -12,10 +12,12 @@ every INGEST_HEARTBEAT_S, as runs:
                channel of its receiver), else the 'label@freq' pairs of rtl_airband's stats file
   up_since     the first beat of an unbroken run
   last_seen    the newest beat of that run
-  detail       jsonb: the newest beat's details (ingest: `recording_now`, receivers: `pairs`)
+  detail       jsonb: the newest beat's details (ingest: `recording_now`, receivers: `pairs`,
+               `started`: the boot id of the receiver's start marker, `counters`)
 
 A beat extends the newest run when its fingerprint is unchanged, it comes no more than the
-component's own max gap after the run's last beat, and (rtl_airband) none of the stats file's
+component's own max gap after the run's last beat, the receiver's start marker
+(<name>.started, core/receivers.py) is the same, and (rtl_airband) none of the stats file's
 counters went down; anything else starts a new run. The max gap follows how often the component
 beats, so an outage longer than a missed beat or two is never bridged:
 
@@ -28,9 +30,26 @@ beats, so an outage longer than a missed beat or two is never bridged:
                     channels(.local).yaml.
 
 A receiver beat is its heartbeat file's mtime, so a receiver that stops writing never extends
-its run; rtl_airband's counters only grow while it runs, so one that went down shows a restart
-however quickly it came back; and a gap in sampling (the ingest stage itself was down) starts a
-new run too. Continuity is never assumed, and `up_since` is the earliest time Pulse can vouch for.
+its run. Its entrypoint writes a new start marker before every start, so a restart ends the run
+however quickly it came back (traintap touches its heartbeat as soon as it starts and the touch
+has no counters; rtl_airband's counters may all still be 0), and a heartbeat older than the
+marker is the old process's and is not recorded. rtl_airband's counters only grow while it runs,
+so one that went down shows a restart too, and a gap in sampling (the ingest stage itself was
+down) starts a new run. Continuity is never assumed, and `up_since` is the earliest time Pulse
+can vouch for. Runs that carry no start marker prove no window (api/rail_verdicts.py).
+
+What can't be seen is a receiver that stalls (alive, writing nothing) for less than its max gap
+and then carries on: counted from its last write, up to about 45 s for rtl_airband and about
+105 s for traintap.
+
+Each sample of an rtl_airband stats file also records, in `receiver_squelch`, how many times each
+channel's squelch opened since the previous sample (channel_squelch_counter), how many of those
+transmissions it dropped as too short (channel_split_tx_dropped_counter) and for how many output
+loops the squelch was open (channel_activity_counter); after a restart, how many since it
+started. Every other opening, and the squelch open at all, means a recording is being written
+while that channel's file output works, and rtl_airband turns a file output off for good after
+one failed open or write while it keeps demodulating: /v1/rail/activity compares them with the
+recordings it got in the window.
 
 An ingest beat's time is when its poll began: everything its input held by then (files, CSV
 rows) is in the database or in `recording_now`, so the newest beat is how far the ingest stage
@@ -47,7 +66,8 @@ import structlog
 from sqlalchemy import text
 
 from core.config_files import load_receiver_intervals
-from core.receivers import Heartbeat, Pairs, pairs_cover, read_heartbeat
+from core.receivers import (ACTIVITY_COUNTER, SPLIT_DROPPED_COUNTER, SQUELCH_COUNTER, Heartbeat, Pairs,
+                            channel_counts, iso, pairs_cover, read_heartbeat)
 from core.settings import Settings, get_settings
 
 log = structlog.get_logger()
@@ -113,11 +133,31 @@ def restarted(before: dict, now: dict) -> bool:
 
 
 def continues(last_seen: datetime, fingerprint: str, detail: dict | None, at: datetime, new_fingerprint: str,
-              counters: dict | None, max_gap_s: float) -> bool:
-    """Does a beat at `at` extend the run whose newest beat was at `last_seen`?"""
+              counters: dict | None, max_gap_s: float, started: str | None = None) -> bool:
+    """Does a beat at `at` extend the run whose newest beat was at `last_seen`? `started`: the new
+    beat's start marker boot id (a receiver's; None: none), which must be the run's."""
     if new_fingerprint != fingerprint or (_utc(at) - _utc(last_seen)).total_seconds() > max_gap_s:
         return False
+    if (started or None) != ((detail or {}).get("started") or None):
+        return False
     return not (counters and restarted((detail or {}).get("counters") or {}, counters))
+
+
+def squelch_deltas(before: dict | None, now: dict | None, fresh: bool) -> list[tuple[str, float, int, int, int]]:
+    """(label or '', freq MHz, squelch openings, transmissions dropped as too short, output loops
+    with the squelch open) for each channel whose counters grew from `before` (the run's last
+    counters, zeros left out) to `now` (a newer read, complete lines only). `fresh`: `now` counts
+    from a restart, i.e. from 0. A counter missing from `now` (a read mid-rewrite) adds nothing:
+    the next read counts it."""
+    metrics = (SQUELCH_COUNTER, SPLIT_DROPPED_COUNTER, ACTIVITY_COUNTER)
+    base = [{} if fresh else channel_counts(before, m) for m in metrics]
+    new = [channel_counts(now, m) for m in metrics]
+    out = []
+    for pair in sorted(set().union(*new), key=lambda p: (p[1], p[0] or "")):
+        grew = [max(0, n[pair] - b.get(pair, 0)) if pair in n else 0 for b, n in zip(base, new, strict=True)]
+        if any(grew):
+            out.append((pair[0] or "", pair[1], *grew))
+    return out
 
 
 def beat(conn, component: str, at: datetime, fingerprint: str = "", detail: dict | None = None,
@@ -134,7 +174,8 @@ def beat(conn, component: str, at: datetime, fingerprint: str = "", detail: dict
     if last is not None and at <= _utc(last.last_seen):
         return False                     # the same (or an older) heartbeat seen again: nothing new
     before = dict(last.detail or {}) if last is not None else {}
-    if last is not None and continues(last.last_seen, last.fingerprint, before, at, fingerprint, counters, max_gap_s):
+    if last is not None and continues(last.last_seen, last.fingerprint, before, at, fingerprint, counters, max_gap_s,
+                                      started=(detail or {}).get("started")):
         if counters is not None and before.get("counters"):
             # keep the run's highest value of a counter this read missed (cut off mid-rewrite)
             payload = json.dumps({**(detail or {}), "counters": {**before["counters"],
@@ -153,20 +194,40 @@ def beat(conn, component: str, at: datetime, fingerprint: str = "", detail: dict
 
 
 def observe_receiver(conn, name: str, s: Settings | None = None) -> bool:
-    """Record receiver `name`'s current heartbeat file, if it has one. A stats file that parses
-    to nothing (read mid-rewrite) is skipped rather than recorded as a change."""
+    """Record receiver `name`'s current heartbeat file, if it has one, with its start marker, and
+    (a stats file) each channel's squelch openings since the previous sample (receiver_squelch).
+    Skipped rather than recorded: a stats file that parses to nothing (read mid-rewrite), and a
+    heartbeat older than the start marker (the receiver started again and hasn't written one
+    since: this one is the old process's)."""
     s = s or get_settings()
     hb = read_heartbeat(name, s)
     if hb is None:
         return False
-    if hb.is_stats and not hb.pairs:
+    if (hb.is_stats and not hb.pairs) or hb.predates_start:
         return False
+    component = receiver_component(name)
     fp = pairs_fingerprint(hb.pairs) if hb.is_stats else ""
     detail = {"pairs": [[label, f] for label, f in hb.pairs], "file": hb.path.name}
+    if hb.started is not None:
+        detail["started"], detail["started_at"] = hb.started.boot, iso(hb.started.at)
     if any(hb.counters.values()):
         detail["counters"] = {k: v for k, v in hb.counters.items() if v}   # a zero can't go down
-    beat(conn, receiver_component(name), hb.at, fp, detail, receiver_max_gap_s(name, hb.is_stats, s),
-         counters=hb.counters)
+    conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:c))"), {"c": component})
+    last = conn.execute(text("SELECT last_seen, detail FROM liveness WHERE component = :c "
+                             "ORDER BY up_since DESC LIMIT 1"), {"c": component}).first()
+    beat(conn, component, hb.at, fp, detail, receiver_max_gap_s(name, hb.is_stats, s), counters=hb.counters)
+    if hb.is_stats and last is not None and hb.at > _utc(last.last_seen):
+        # openings since the previous sample; after a restart (another marker, or a counter that
+        # went down), since the receiver started. The first sample ever has nothing to count from.
+        before = dict(last.detail or {})
+        fresh = (before.get("started") or None) != hb.boot or restarted(before.get("counters") or {}, hb.counters)
+        rows = squelch_deltas(before.get("counters"), hb.counters, fresh)
+        if rows:
+            conn.execute(text("INSERT INTO receiver_squelch (component, at, label, freq_mhz, opens, dropped, active) "
+                              "VALUES (:c, :at, :label, :f, :o, :d, :a) "
+                              "ON CONFLICT (component, at, label, freq_mhz) DO NOTHING"),
+                         [{"c": component, "at": hb.at, "label": label, "f": f, "o": o, "d": d, "a": a}
+                          for label, f, o, d, a in rows])
     return True
 
 
@@ -186,8 +247,9 @@ def record_ingest(source: str, *, blind: str | None = None, detail: dict | None 
             observe_receiver(c, name, s)
         if time.monotonic() - _last_prune > 3600:
             _last_prune = time.monotonic()
-            c.execute(text("DELETE FROM liveness WHERE last_seen < :t"),
-                      {"t": now - timedelta(days=s.liveness_keep_days)})
+            keep = now - timedelta(days=s.liveness_keep_days)
+            c.execute(text("DELETE FROM liveness WHERE last_seen < :t"), {"t": keep})
+            c.execute(text("DELETE FROM receiver_squelch WHERE at < :t"), {"t": keep})
 
 
 # ── reading it back (the API) ───────────────────────────────────────────────
@@ -207,6 +269,11 @@ class Run:
     @property
     def is_stats(self) -> bool:
         return self.fingerprint != ""
+
+    @property
+    def started(self) -> str | None:
+        """The boot id of the receiver's start marker during this run (None: it wrote none)."""
+        return self.detail.get("started") or None
 
     def covers(self, ch, known: dict | None = None) -> bool:
         """Did the receiver, during this run, listen to `ch` (pairs_cover; a plain heartbeat
@@ -238,10 +305,14 @@ def current(runs: list[Run], now: datetime, max_gap_s: float) -> Run | None:
 
 def file_continues(run: Run, hb: Heartbeat | None, max_gap_s: float) -> bool | None:
     """Does receiver heartbeat file `hb`, read now, continue `run` (the receiver's current run, as
-    the ingest stage last recorded it)? True: same channel list, counters not reset, within the
-    max gap. False: the receiver changed since (a restart or a re-render the ingest stage hasn't
-    recorded yet). None: the file adds nothing newer (missing, not newer, or read mid-rewrite)."""
+    the ingest stage last recorded it)? True: same channel list and start marker, counters not
+    reset, within the max gap. False: the receiver changed since (a restart or a re-render the
+    ingest stage hasn't recorded yet; another start marker means a restart even when no newer
+    heartbeat is there yet). None: the file adds nothing newer (missing, not newer, or read
+    mid-rewrite)."""
+    if hb is not None and hb.boot != run.started:
+        return False
     if hb is None or hb.at <= run.last_seen or (hb.is_stats and not hb.pairs):
         return None
     fp = pairs_fingerprint(hb.pairs) if hb.is_stats else ""
-    return continues(run.last_seen, run.fingerprint, run.detail, hb.at, fp, hb.counters, max_gap_s)
+    return continues(run.last_seen, run.fingerprint, run.detail, hb.at, fp, hb.counters, max_gap_s, hb.boot)

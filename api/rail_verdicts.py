@@ -17,9 +17,13 @@ point be called quiet?
 `unknown`     nothing was heard, but Pulse can't prove nothing was said: see `reasons`.
 `quiet`       nothing was heard, and for the WHOLE window every channel that covers the point
               was listened to: its receiver's heartbeat history shows it up since before
-              `window_start` with the configured frequency (and its recordings filed under a
-              channel that covers the point), the ingest stage's heartbeat history shows it up
-              since before `window_start` and able to see its input, and nothing in the window
+              `window_start` with no restart (the receiver writes a start marker at every start,
+              and it is unchanged) and with the configured frequency (and its recordings filed
+              under a channel that covers the point); for rail voice, the receiver's squelch
+              counter is there to check, and whatever its counters show the squelch open for in
+              the window (bar transmissions it dropped as too short) became a recording; the
+              ingest stage's heartbeat history shows it up
+              since before `window_start` and able to see its input; and nothing in the window
               is left unattributed (unmapped or dropped recordings, unclaimed packets). The
               window then ends where that proof ends (`window_end`): at the ingest stage's last
               check of its input and the covering receivers' newest heartbeats, whichever is
@@ -58,6 +62,8 @@ class ChannelProof:
     reported_freqs: list[float] = field(default_factory=list)   # its label, on another frequency
     problem: str | None = None                  # why the receiver lists its frequency but isn't hearing it
     via_uncovered: list[str] = field(default_factory=list)      # heard through these, which don't cover
+    no_marker: bool = False                     # listening, by a receiver that writes no start marker
+    recorder: str | None = None                 # why Pulse can't check that what it hears becomes recordings
 
 
 @dataclass
@@ -86,8 +92,11 @@ def _channel_gap(p: ChannelProof, window_start: datetime) -> str | None:
     if p.via_uncovered:
         return (f"the receiver records this channel's frequency as {', '.join(p.via_uncovered)}, which doesn't "
                 "cover this point, so those recordings don't count here")
+    if p.no_marker:
+        return (f"the receiver writes no start marker ({p.ch.receiver_name}.started), so a restart in the window "
+                "can't be ruled out")
     if p.listening_since is not None and p.listening_since <= window_start:
-        return None
+        return p.recorder
     if p.reported_freqs:
         reported = ", ".join(f"{f:g}" for f in p.reported_freqs)
         return f"the receiver reports this channel on {reported} MHz, not the configured {p.ch.freq_mhz:g} MHz"

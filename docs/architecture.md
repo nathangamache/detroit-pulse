@@ -105,8 +105,9 @@ queued ──transcribe──▶ transcribed ──extract──▶ done
   quiet only on proof for the whole window: every channel whose own area covers it was listened
   to on its configured frequency since before the window, by the heartbeat history the ingest
   stage records in `liveness` (`core/liveness.py`, [sdr-ingest.md](sdr-ingest.md#8-heartbeat-history-and-the-ingest-heartbeat)),
-  with no gap longer than a missed beat or two of that receiver and no restart, the ingest
-  stage itself beat as long, and nothing was heard. The quiet window ends at the last moment
+  with no gap longer than a missed beat or two of that receiver and no restart (each receiver
+  writes a start marker before every start), whatever rtl_airband's squelch counters show it
+  heard became a recording, the ingest stage itself beat as long, and nothing was heard. The quiet window ends at the last moment
   those heartbeats cover, never at the request time.
 
 ## Data model
@@ -120,7 +121,8 @@ queued ──transcribe──▶ transcribed ──extract──▶ done
 | `llm_usage` | One row per Claude response: tokens by kind, cost, stop reason, request id. |
 | `geocode_cache` | $0 geocoder results and misses, with `source`. |
 | `pipeline_events` | Cap hits, admin resets. |
-| `liveness` | Runs of receiver and ingest heartbeats (`up_since` .. `last_seen`, the channel list as a fingerprint), written by the ingest stage; `/v1/rail/activity` `verdicts` read them. |
+| `liveness` | Runs of receiver and ingest heartbeats (`up_since` .. `last_seen`, the channel list as a fingerprint, the receiver's start marker), written by the ingest stage; `/v1/rail/activity` `verdicts` read them. |
+| `receiver_squelch` | Per rtl_airband stats sample and channel: squelch openings, transmissions dropped as too short and output loops with the squelch open since the previous sample; `verdicts` compare them with the recordings in the window. |
 | `shadow_log`, `pipeline_metrics`, `lora_model_registry` | Legacy tables kept so the archive and the live schema match. |
 
 Migrations: `db/migrations` (alembic). The baseline keeps the original revision id, so

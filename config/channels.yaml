@@ -21,7 +21,8 @@
 #
 # For /v1/feeds/status (docs/pulse-api.md#feeds_status):
 # receiver     the receiver that hears this channel; its heartbeat is
-#              RECEIVER_STATUS_DIR/<name>.prom or <name>.heartbeat (docs/sdr-ingest.md#6-receiver-heartbeats).
+#              RECEIVER_STATUS_DIR/<name>.prom or <name>.heartbeat, and its start marker <name>.started
+#              (docs/sdr-ingest.md#6-receiver-heartbeats).
 #              Default: rail-airband for rail_* voice kinds, traintap-eot for eot, none otherwise.
 # coverage     what it hears: {area, radius_km, lines: [{railroad, name, aliases: [...]}]}; aliases
 #              are the same track's names in other datasets (FRA vs NARN). Default: from the rail plan.

@@ -194,6 +194,88 @@ def test_rtl_airband_counters_that_went_down_are_a_restart(db, status_dir):
     assert liveness.file_continues(run, None, 45) is None
 
 
+def test_a_traintap_restart_its_heartbeat_cant_show_ends_the_run(db, status_dir):
+    """traintap's heartbeat is a bare touch with no counters, and it touches as soon as it starts
+    (upstream Heartbeat._last starts at 0): a restart 10 minutes ago left touches 600 s and 510 s
+    ago, 90 s apart, inside the 105 s max gap, and was bridged as one run. The start marker its
+    entrypoint writes (a new boot id at every start) ends the run there. A touch by the old
+    process that the ingest stage samples only after the new marker appeared (540 s ago, the
+    marker 515 s ago) is from before the restart and records nothing."""
+    from tests.test_api import _mark
+    hb = status_dir / "traintap-eot.heartbeat"
+    hb.write_text("")
+    _mark(status_dir, "traintap-eot", "boot-1", 3 * 3600)
+    for ago in range(7200, 599, -60):
+        _observe(db, hb, "traintap-eot", ago)
+    _mark(status_dir, "traintap-eot", "boot-2", 515)
+    _observe(db, hb, "traintap-eot", 540)
+    assert len(_runs(db, "receiver:traintap-eot")) == 1
+    assert abs(_runs(db, "receiver:traintap-eot")[0][1].timestamp() - (time.time() - 600)) < 2
+    for ago in range(510, -1, -60):
+        _observe(db, hb, "traintap-eot", ago)
+    runs = _runs(db, "receiver:traintap-eot")
+    assert len(runs) == 2 and abs(runs[1][0].timestamp() - (time.time() - 510)) < 2
+    with db.connect() as c:
+        detail = c.execute(text("SELECT detail FROM liveness WHERE component = 'receiver:traintap-eot' "
+                                "ORDER BY up_since DESC LIMIT 1")).scalar()
+    assert detail["started"] == "boot-2"
+
+
+def test_an_rtl_airband_restart_with_every_counter_at_zero_ends_the_run(db, status_dir):
+    """Until its first squelch opening since it last started (a crash loop, two quick redeploys)
+    every rtl_airband counter is 0, and 0 can't go down: a restart 10 minutes ago (rewrites 615 s
+    and 585 s ago, 30 s apart) was one unbroken run. The start marker ends it."""
+    from tests.test_api import ROAD_ONLY, _mark
+    prom = status_dir / "rail-airband.prom"
+    prom.write_text(ROAD_ONLY)                                   # every counter 0
+    _mark(status_dir, "rail-airband", "boot-1", 3 * 3600)
+    for ago in range(7200, 614, -15):
+        _observe(db, prom, "rail-airband", ago)
+    _mark(status_dir, "rail-airband", "boot-2", 600)
+    for ago in range(585, -1, -15):
+        _observe(db, prom, "rail-airband", ago)
+    runs = _runs(db, "receiver:rail-airband")
+    assert len(runs) == 2 and abs(runs[1][0].timestamp() - (time.time() - 585)) < 2
+    # the API reads the files itself too: a marker newer than the run's, not yet sampled, is a
+    # restart; the same marker continues the run
+    from core.receivers import read_heartbeat
+    with db.connect() as c:
+        run = liveness.runs_since(c, ["receiver:rail-airband"],
+                                  datetime.now(timezone.utc) - timedelta(hours=1))["receiver:rail-airband"][0]
+    t = time.time()
+    os.utime(prom, (t, t))
+    assert liveness.file_continues(run, read_heartbeat("rail-airband"), 45) is True
+    _mark(status_dir, "rail-airband", "boot-3", 1)
+    assert liveness.file_continues(run, read_heartbeat("rail-airband"), 45) is False
+
+
+def test_squelch_openings_are_recorded_per_sample(db, status_dir):
+    """Every sample of rtl_airband's stats file records how many times each channel's squelch
+    opened since the last one (channel_squelch_counter), how many transmissions it dropped as too
+    short (channel_split_tx_dropped_counter) and how long the squelch was open
+    (channel_activity_counter): the run itself keeps only the newest counters. After a restart
+    (a new start marker) the counters count from 0 again."""
+    from tests.test_api import _counters, _mark
+    prom = status_dir / "rail-airband.prom"
+    _mark(status_dir, "rail-airband", "boot-1", 3 * 3600)
+    for ago, act, sq, dr in ((120, 900, 40, 2), (105, 900, 40, 2), (90, 960, 43, 3), (75, 970, 44, 3)):
+        prom.write_text(_counters("160.215", "csx_road", act, sq, dr) + _counters("160.950", "csx_yard", 10, 1, 0))
+        _observe(db, prom, "rail-airband", ago)
+    _mark(status_dir, "rail-airband", "boot-2", 70)
+    prom.write_text(_counters("160.215", "csx_road", 5, 2, 0) + _counters("160.950", "csx_yard", 0, 0, 0))
+    _observe(db, prom, "rail-airband", 60)
+    with db.connect() as c:
+        rows = [tuple(r) for r in c.execute(text(
+            "SELECT at, label, freq_mhz, opens, dropped, active FROM receiver_squelch "
+            "WHERE component = 'receiver:rail-airband' ORDER BY at, label")).all()]
+    # the first sample has nothing to compare with; 90 s ago: 3 openings, 1 dropped, 60 loops with
+    # the squelch open; after the restart: what it counted since it started
+    assert [r[1:] for r in rows] == [("csx_road", 160.215, 3, 1, 60), ("csx_road", 160.215, 1, 0, 10),
+                                     ("csx_road", 160.215, 2, 0, 5)]
+    for (at, *_), ago in zip(rows, (90, 75, 60), strict=True):
+        assert abs(at.timestamp() - (time.time() - ago)) < 3
+
+
 # ── api/rail_verdicts.py (no database) ───────────────────────────────────────
 
 W0, W1 = T0, T0 + timedelta(minutes=30)

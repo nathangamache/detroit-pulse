@@ -191,17 +191,41 @@ QUIET_RAIL = {"railroads": {"CSX": {"subdivisions": {"Test Sub": {
     "aliases": ["TESTNAME"], "center": {"lat": 42.25, "lon": -83.70}, "radius_km": 8}}}}}
 
 
-ROAD_ONLY = 'channel_activity_counter{freq="160.215",label="csx_road"}\t0\n'
-BOTH_TUNED = ('channel_activity_counter{freq="160.215",label="csx_road"}\t0\n'
-              'channel_activity_counter{freq="160.950",label="csx_yard"}\t0\n')
+def _counters(freq: str, label: str, activity: int = 0, squelch: int = 0, dropped: int = 0) -> str:
+    """One channel's lines in rtl_airband's stats file (v7.0.1 src/output.cpp): the label/frequency
+    pair, and the squelch openings Pulse checks against the recordings it got (less those dropped
+    as shorter than split_tx_drop_shorter_than)."""
+    m = f'{{freq="{freq}",label="{label}"}}'
+    return (f"channel_activity_counter{m}\t{activity}\n"
+            f"channel_squelch_counter{m}\t{squelch}\n"
+            f"channel_split_tx_dropped_counter{m}\t{dropped}\n")
+
+
+ROAD_ONLY = _counters("160.215", "csx_road")
+BOTH_TUNED = ROAD_ONLY + _counters("160.950", "csx_yard")
 NEAR = {"lat": 42.26, "lon": -83.71}
+BOOT = "test-boot-1"
+
+
+def _mark(status, name: str, boot: str = BOOT, ago_s: float = 6 * 3600) -> None:
+    """<name>.started, the start marker a receiver's entrypoint writes before each start (a new
+    boot id every time), `ago_s` seconds ago."""
+    import os
+    import time
+    p = status / f"{name}.started"
+    p.write_text(f"{boot} 2026-11-14T00:00:00Z\n")
+    t = time.time() - ago_s
+    os.utime(p, (t, t))
 
 
 def _beats(db, component: str, minutes: float, fingerprint: str = "", detail: dict | None = None,
            until_s: float = 5, every_s: float = 15) -> None:
     """Liveness history (core/liveness.py): a beat every `every_s` (INGEST_HEARTBEAT_S) from
-    `minutes` ago to `until_s` ago."""
+    `minutes` ago to `until_s` ago. A receiver's beats carry the start marker BOOT (the one
+    _mark writes) unless `detail` says otherwise."""
     from core import liveness
+    if component.startswith("receiver:") and "started" not in (detail or {}):
+        detail = {**(detail or {}), "started": BOOT}
     now = datetime.now(timezone.utc)
     t, end = now - timedelta(minutes=minutes), now - timedelta(seconds=until_s)
     with db.begin() as c:
@@ -238,6 +262,8 @@ def _receiver_client(cfg_dir, tmp_path, monkeypatch, channels: dict):
     (cfg_dir / "rail_channels.local.yaml").write_text(yaml.safe_dump(QUIET_RAIL))
     status = tmp_path / "receivers"
     status.mkdir()
+    for name in ("rail-airband", "traintap-eot"):        # both started 6 h ago (deploy/docker-compose.yml)
+        _mark(status, name)
     monkeypatch.setenv("RECEIVER_STATUS_DIR", str(status))
     monkeypatch.setenv("TRAINTAP_CSV", str(tmp_path / "traintap" / "trains.csv"))
     reset_settings_cache()
