@@ -1,189 +1,86 @@
-import os
+#!/usr/bin/env python3
+"""Detroit Pulse pipeline: ingest -> transcribe -> extract -> (resolver), as threads in one process.
+
+    uv run python run_pipeline.py                         # all stages
+    uv run python run_pipeline.py --stages ingest,transcribe
+    uv run python run_pipeline.py --stages extract,resolver --sources fixture
+
+Stages talk only through Postgres (transcript_chunks.status) plus Redis doorbells,
+so they can also run as separate processes. On this shared box run it niced:
+
+    nice -n 19 uv run python run_pipeline.py
+"""
+from __future__ import annotations
+
+import argparse
+import signal
 import threading
 import time
-import signal
-import sys
+
 import structlog
-from dotenv import load_dotenv
 
-load_dotenv()
+from core.logging import setup_logging
+from core.settings import get_settings
+
 log = structlog.get_logger()
-
-FEEDS_CONFIG = "ingest/feeds.yaml"
-
-
-def load_enabled_feeds():
-    import yaml
-    with open(FEEDS_CONFIG) as f:
-        config = yaml.safe_load(f)
-    return [f for f in config["feeds"] if f.get("enabled", True)]
+ALL_STAGES = ["ingest", "transcribe", "extract", "resolver"]
 
 
-def load_all_models():
-    """
-    Load ALL ML models in the main thread before any workers start.
-    PyTorch CUDA initialization is not thread-safe — loading models
-    concurrently across threads causes segfaults.
-    """
-    import torch
-    from faster_whisper import WhisperModel
-    import os
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--stages", default=",".join(ALL_STAGES))
+    ap.add_argument("--sources", default=None, help="override INGEST_SOURCES")
+    a = ap.parse_args()
+    setup_logging()
+    s = get_settings()
+    stages = [x.strip() for x in a.stages.split(",") if x.strip()]
+    stop = threading.Event()
+    threads: list[threading.Thread] = []
 
-    # ── VAD ──────────────────────────────────────────────────────────
-    log.info("Loading Silero VAD model (CPU)")
-    vad_model, vad_utils = torch.hub.load(
-        repo_or_dir = "snakers4/silero-vad",
-        model       = "silero_vad",
-        force_reload = False,
-        trust_repo  = True,
-    )
-    # Force VAD to CPU — it is lightweight and does not need GPU.
-    # Running VAD on CUDA alongside Whisper causes segfaults from
-    # concurrent CUDA context initialization across threads.
-    vad_model = vad_model.cpu()
-    log.info("Silero VAD model loaded (CPU)")
+    if "ingest" in stages:
+        from ingest.runner import start_sources
+        names = [x.strip() for x in a.sources.split(",")] if a.sources else None
+        threads += start_sources(stop, names)
 
-    # ── Whisper ───────────────────────────────────────────────────────
-    whisper_model_name = os.getenv("WHISPER_MODEL", "large-v3")
-    log.info("Loading Whisper model", model=whisper_model_name)
-    whisper_model = WhisperModel(
-        whisper_model_name,
-        device       = "cuda",
-        compute_type = "float16",
-    )
-    log.info("Whisper model loaded")
+    if "transcribe" in stages:
+        from transcribe.worker import load_model, run_transcribe_worker
+        model = load_model(s)                     # load once, in the main thread
+        for i in range(max(1, s.whisper_num_workers)):
+            threads.append(threading.Thread(target=run_transcribe_worker, args=(stop, model),
+                                            name=f"transcribe-{i}", daemon=True))
 
-    return {
-        "vad_model":     vad_model,
-        "vad_utils":     vad_utils,
-        "whisper_model": whisper_model,
-    }
+    worker = None
+    if "extract" in stages:
+        from extract.worker import ExtractWorker, run_extract_worker
+        worker = ExtractWorker()
+        threads.append(threading.Thread(target=run_extract_worker, args=(stop, worker), name="extract", daemon=True))
 
-
-def run_feed_worker_thread(feed, vad_model, vad_utils):
-    from ingest.feed_worker import run_feed_worker
-    from api.broadcaster import publish_debug
-
-    feed_id = feed["id"]
-    log.info("Feed worker thread starting", feed_id=feed_id)
-
-    while True:
-        try:
-            publish_debug("ingest", feed_id,
-                status = "starting",
-                name   = feed["name"])
-            run_feed_worker(feed, vad_model, vad_utils)
-        except Exception as e:
-            log.error("Feed worker crashed — restarting in 10s",
-                      feed_id=feed_id, error=str(e))
-            time.sleep(10)
-
-
-def run_whisper_thread(whisper_model):
-    from transcribe.whisper_worker import run_whisper_worker
-    log.info("Whisper worker thread starting")
-    while True:
-        try:
-            run_whisper_worker(whisper_model=whisper_model)
-        except Exception as e:
-            log.error("Whisper worker crashed — restarting in 10s", error=str(e))
-            time.sleep(10)
-
-
-def run_pipeline_thread():
-    from llm.pipeline_worker import run_pipeline_worker
-    log.info("Pipeline worker thread starting")
-    while True:
-        try:
-            run_pipeline_worker()
-        except Exception as e:
-            log.error("Pipeline worker crashed — restarting in 10s", error=str(e))
-            time.sleep(10)
-
-
-def run_resolver_thread():
-    from correlation.resolver import run_resolver_loop
-    log.info("Resolver thread starting")
-    while True:
-        try:
-            run_resolver_loop(interval_seconds=300)
-        except Exception as e:
-            log.error("Resolver crashed — restarting in 30s", error=str(e))
-            time.sleep(30)
-
-
-def main():
-    feeds = load_enabled_feeds()
-    log.info("Detroit Pulse pipeline starting",
-             feeds    = len(feeds),
-             feed_ids = [f["id"] for f in feeds])
-
-    # Mark restart in debug log
-    from api.debug_logger import log_separator
-    log_separator(f"PIPELINE STARTED — {len(feeds)} feeds")
-
-    # Load ALL models in main thread before spawning workers
-    log.info("Loading all ML models in main thread...")
-    models = load_all_models()
-    log.info("All models loaded — starting workers")
-
-    threads = []
-
-    for feed in feeds:
-        t = threading.Thread(
-            target = run_feed_worker_thread,
-            args   = (feed, models["vad_model"], models["vad_utils"]),
-            name   = f"feed-{feed['id']}",
-            daemon = True,
-        )
-        threads.append(t)
-
-    threads.append(threading.Thread(
-        target = run_whisper_thread,
-        args   = (models["whisper_model"],),
-        name   = "whisper",
-        daemon = True,
-    ))
-
-    num_pipeline_workers = int(os.getenv("NUM_PIPELINE_WORKERS", "4"))
-    log.info("Starting pipeline workers", count=num_pipeline_workers)
-    for i in range(num_pipeline_workers):
-        threads.append(threading.Thread(
-            target = run_pipeline_thread,
-            name   = f"pipeline-{i}",
-            daemon = True,
-        ))
-
-    threads.append(threading.Thread(
-        target = run_resolver_thread,
-        name   = "resolver",
-        daemon = True,
-    ))
+    if "resolver" in stages:
+        from correlation.resolver import run_resolver_loop
+        client = worker.client if worker else None
+        meter = worker.meter if worker else None
+        threads.append(threading.Thread(target=run_resolver_loop, args=(stop, client, meter), name="resolver",
+                                        daemon=True))
 
     for t in threads:
-        t.start()
-        log.info("Thread started", name=t.name)
-        # Stagger feed worker starts to avoid concurrent CUDA/torch
-        # initialization which causes segfaults
-        if t.name.startswith("feed-"):
-            time.sleep(2)
+        if not t.is_alive():
+            t.start()
+    log.info("pipeline running", stages=stages, threads=[t.name for t in threads])
 
-    def handle_shutdown(sig, frame):
-        log.info("Shutting down pipeline...")
-        sys.exit(0)
+    def _shutdown(sig, _frame):
+        log.info("shutting down", signal=sig)
+        stop.set()
 
-    signal.signal(signal.SIGINT,  handle_shutdown)
-    signal.signal(signal.SIGTERM, handle_shutdown)
-
-    log.info("All workers running — press Ctrl+C to stop")
-
-    while True:
-        time.sleep(60)
-        alive = [t.name for t in threads if t.is_alive()]
-        dead  = [t.name for t in threads if not t.is_alive()]
-        log.info("Thread health",
-                 alive = len(alive),
-                 dead  = dead if dead else "none")
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+    while not stop.is_set():
+        stop.wait(60)
+        dead = [t.name for t in threads if not t.is_alive() and not t.name.startswith("ingest-broadcastify")]
+        if dead and not stop.is_set():
+            log.warning("stage threads not alive", dead=dead)
+    for t in threads:
+        t.join(timeout=10)
+    time.sleep(0.1)
 
 
 if __name__ == "__main__":

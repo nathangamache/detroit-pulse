@@ -1,62 +1,65 @@
-import os
-import time
-import structlog
-from dotenv import load_dotenv
-from correlation.incident_store import get_all_active, resolve
-from correlation.unit_store import active_units, release
+"""Periodic housekeeping: idle-resolve incidents (in Postgres, with a broadcast), recover stuck queue rows.
 
-load_dotenv()
+Replaces two old resolvers that disagreed: correlation/resolver.py only touched Redis
+(default 4 h, and parsed "Z" timestamps as local time) and api/auto_resolver.py only
+touched Postgres after 48 h, so resolved incidents lingered on the map. There is now ONE
+idle timeout, INCIDENT_IDLE_RESOLVE_S (default 4 h), applied to Postgres, followed by a
+summary-on-close and an incident:resolve event.
+"""
+from __future__ import annotations
+
+import threading
+
+import structlog
+from sqlalchemy import text
+
+from core import bus
+from core.db import get_engine
+from core.settings import get_settings
+from core.workqueue import requeue_all_stale
+from correlation.engine import incident_dict
+from extract.summary import summarize_incident
+
 log = structlog.get_logger()
 
-# Incidents with no updates for this many seconds are auto-resolved
-STALE_INCIDENT_SECONDS = int(os.getenv("INCIDENT_TTL_SECONDS", "14400"))
 
-
-def prune_stale_incidents() -> list[str]:
-    """
-    Find and resolve incidents that haven't been updated recently.
-    Returns list of resolved incident IDs.
-    """
-    active = get_all_active()
-    resolved_ids = []
-    now = time.time()
-
-    for incident in active:
-        last_updated_str = incident.get("last_updated", "")
+def resolve_idle(summary_client=None, meter=None) -> list[str]:
+    s = get_settings()
+    with get_engine().begin() as c:
+        ids = [str(r[0]) for r in c.execute(text("""
+            UPDATE incidents SET status = 'RESOLVED', resolved_at = now()
+             WHERE status = 'ACTIVE' AND last_updated < now() - make_interval(secs => :idle)
+         RETURNING incident_id"""), {"idle": s.incident_idle_resolve_s})]
+    for iid in ids:
         try:
-            import datetime
-            last_updated = datetime.datetime.strptime(
-                last_updated_str, "%Y-%m-%dT%H:%M:%SZ"
-            ).timestamp()
-            age_seconds = now - last_updated
-
-            if age_seconds > STALE_INCIDENT_SECONDS:
-                iid = incident["incident_id"]
-                log.info(
-                    "Auto-resolving stale incident",
-                    incident_id=iid,
-                    age_hours=round(age_seconds / 3600, 1),
-                )
-                resolve(iid, chunk_id="auto-resolver")
-                resolved_ids.append(iid)
-
-        except (ValueError, TypeError):
-            continue
-
-    return resolved_ids
+            summarize_incident(iid, "resolve", client=summary_client, meter=meter)
+        except Exception as e:  # noqa: BLE001
+            log.warning("summary on close failed", incident_id=iid[:8], error=str(e))
+        with get_engine().connect() as c:
+            inc = incident_dict(c, iid)
+        if inc:
+            bus.publish_event("incident:resolve", inc)
+    if ids:
+        log.info("idle incidents resolved", count=len(ids))
+    return ids
 
 
-def run_resolver_loop(interval_seconds: int = 300):
-    """
-    Run the resolver on a fixed interval.
-    Designed to run as a lightweight background thread.
-    """
-    log.info("Resolver loop starting", interval_seconds=interval_seconds)
-    while True:
+def housekeeping_once(summary_client=None, meter=None) -> dict:
+    out = {"resolved": resolve_idle(summary_client, meter), "requeued": requeue_all_stale()}
+    try:
+        from geocode.cache import GeocodeCache
+        out["geocache_purged"] = GeocodeCache().purge_expired()
+    except Exception:  # noqa: BLE001
+        out["geocache_purged"] = 0
+    return out
+
+
+def run_resolver_loop(stop: threading.Event | None = None, summary_client=None, meter=None) -> None:
+    stop = stop or threading.Event()
+    s = get_settings()
+    while not stop.is_set():
         try:
-            resolved = prune_stale_incidents()
-            if resolved:
-                log.info("Pruned stale incidents", count=len(resolved))
-        except Exception as e:
-            log.error("Resolver error", error=str(e))
-        time.sleep(interval_seconds)
+            housekeeping_once(summary_client, meter)
+        except Exception as e:  # noqa: BLE001
+            log.error("housekeeping failed", error=str(e))
+        stop.wait(s.resolver_interval_s)

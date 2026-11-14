@@ -46,7 +46,8 @@ class MockMessages:
         content = [] if stop == "refusal" else [SimpleNamespace(type="text", text=text)]
         n_in = len(user) // 3
         first = len(self.owner.calls) == 1
-        sys_tokens = len(kwargs["system"][0]["text"]) // 3
+        sysp = kwargs["system"]
+        sys_tokens = len(sysp if isinstance(sysp, str) else sysp[0]["text"]) // 3
         usage = SimpleNamespace(
             input_tokens=n_in, output_tokens=len(text) // 3,
             cache_creation_input_tokens=sys_tokens if first else 0,

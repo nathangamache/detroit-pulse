@@ -29,10 +29,11 @@ SIGNAL_WEIGHTS = {
 }
 
 # ── Decision thresholds ────────────────────────────────────────────────────
-THRESHOLD_STRONG_MATCH = 0.85   # LLM Mode A sanity check only
-THRESHOLD_WEAK_MATCH   = 0.50   # LLM Mode B full arbitration
-THRESHOLD_AMBIGUOUS    = 0.20   # LLM Mode B with conservative bias
-# Below THRESHOLD_AMBIGUOUS → NO_MATCH → straight to NEW, skip judge
+# Historical thresholds (the old LLM CONFIRM/VETO and MATCH/NEW/RETRY arbitration is gone;
+# correlation/engine.py now uses a single CORRELATION_MATCH_THRESHOLD, default 0.50).
+THRESHOLD_STRONG_MATCH = 0.85
+THRESHOLD_WEAK_MATCH   = 0.50
+THRESHOLD_AMBIGUOUS    = 0.20
 
 # ── Stop words for token overlap ──────────────────────────────────────────
 _ADDR_STOP = {
@@ -101,13 +102,15 @@ def compute_signals(
     feed_is_high_volume:  bool,
     candidate_incident:   dict,
     incompatible_pairs:   set,
+    now:                  datetime | None = None,
 ) -> CorrelationSignals:
     """
     Compute all deterministic signals between an incoming chunk
     and a candidate incident. Pure computation — no I/O.
     """
     sig = CorrelationSignals()
-    now = datetime.now(timezone.utc)
+    # measure age/burst relative to the transmission's capture time (backlogs, replays)
+    now = now or datetime.now(timezone.utc)
 
     candidate_addr = (
         candidate_incident.get("address_full") or
@@ -276,6 +279,7 @@ def score_all_candidates(
     feed_is_high_volume:  bool,
     active_incidents:     list[dict],
     incompatible_pairs:   set,
+    now:                  datetime | None = None,
 ) -> list[dict]:
     """
     Score all candidate incidents with Layer 1 signals.
@@ -294,6 +298,7 @@ def score_all_candidates(
             feed_is_high_volume = feed_is_high_volume,
             candidate_incident  = inc,
             incompatible_pairs  = incompatible_pairs,
+            now                 = now,
         )
         scored.append({"incident": inc, "signals": sig})
 
