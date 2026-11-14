@@ -59,7 +59,7 @@ def test_process_one_stores_transcript_and_empty_rows(db, tmp_path):
     enqueue_transmission(source="sdr_files", source_key=str(b), channel_id="c1", captured_at=now, audio_path=str(b))
     tails = ContextTails(300)
     s = get_settings()
-    rows = claim("queued", "transcribing", limit=2)
+    rows = sorted(claim("queued", "transcribing", limit=2), key=lambda r: r["audio_path"])   # a, then b
     process_one(FakeModel("Engine 5 respond to Packard and State"), rows[0], tails, s)
     m2 = FakeModel("")
     process_one(m2, rows[1], tails, s)

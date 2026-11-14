@@ -118,7 +118,9 @@ class ExtractWorker:
             llm_idx = [i for i, (_, pf) in enumerate(self.pending) if not pf.skip_llm]
             if len(llm_idx) >= bs:
                 cut = llm_idx[bs - 1] + 1
-            elif self.pending and (force_flush or self.oldest_wait_s() >= self.s.llm_batch_max_wait_s):
+            elif self.pending and (force_flush or self.client is None
+                                   or self.oldest_wait_s() >= self.s.llm_batch_max_wait_s):
+                # rules-only mode has no per-call cost to amortize, so never wait for a batch
                 cut = len(self.pending)
             else:
                 break

@@ -9,8 +9,9 @@ so cost grew with the square of incident length. Now:
   * SUMMARY_MODE=rate_limited: at most one summary per incident per SUMMARY_MIN_INTERVAL_S;
   * input is bounded: the last SUMMARY_MAX_CHUNKS (15) short summaries, never full transcripts.
 
-With Claude available and under the caps, one small structured call (workload "summary")
-writes the summary; otherwise a free template is used.
+With Claude available, under the caps, and at least SUMMARY_LLM_MIN_NOTES (3) notes, one small
+structured call (workload "summary") writes the summary; otherwise a free template is used
+(most incidents are one or two transmissions, where the template says the same thing).
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from core.settings import get_settings
 from extract.cost import CapReached, CostMeter
 
 log = structlog.get_logger()
+SUMMARY_LLM_MIN_NOTES = 3
 
 SUMMARY_SYSTEM = (
     "You write a one-paragraph summary (at most 60 words) of a public-safety or railroad incident from a "
@@ -78,7 +80,7 @@ def summarize_incident(incident_id: str, event: str, client=None, meter: CostMet
     if inc is None or not should_summarize(inc, event):
         return None
     summary = None
-    if client is not None and s.llm_enabled and notes:
+    if client is not None and s.llm_enabled and len(notes) >= SUMMARY_LLM_MIN_NOTES:
         meter = meter or CostMeter()
         user = "Notes, oldest first:\n" + "\n".join(f"- {n}" for n in notes)
         kwargs = {"model": s.llm_model, "max_tokens": 400, "system": SUMMARY_SYSTEM,

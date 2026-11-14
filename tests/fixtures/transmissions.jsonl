@@ -1,0 +1,9 @@
+# Synthetic transmissions (invented; no real incidents) for the `fixture` ingest source.
+# channel ids match the generic examples in config/channels.yaml.
+{"channel_id": "example_fire_dispatch", "text": "Engine 4, Ladder 1, respond to Packard and Stadium for a vehicle fire, caller reports smoke from the hood.", "offset_s": 0}
+{"channel_id": "example_fire_dispatch", "text": "Engine 4 on scene.", "offset_s": 240}
+{"channel_id": "example_fire_dispatch", "text": "Engine 4, car is fully involved, we'll need a second line.", "offset_s": 300}
+{"channel_id": "example_rail_road", "text": "Q326 you'll be holding at the east end of the siding for the westbound.", "offset_s": 320}
+{"channel_id": "example_rail_road", "text": "CSX equipment detector, milepost one two three point four, track two. No defects. No defects. Total axles four one two. Train speed four seven. Detector out.", "offset_s": 400}
+{"channel_id": "example_fire_dispatch", "text": "Thank you.", "offset_s": 410}
+{"channel_id": "example_fire_dispatch", "text": "Ladder 1, Engine 4 clear, back in service.", "offset_s": 900}

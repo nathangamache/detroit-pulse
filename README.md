@@ -1,174 +1,122 @@
 # Detroit Pulse
 
-A real-time public safety dashboard for metro Detroit. It pulls live audio from 15+ Broadcastify scanner feeds across Wayne, Oakland, and Washtenaw counties, runs it through a local ML pipeline, and puts incidents on a map as they happen.
+Real-time scanner-radio incidents for Wayne, Oakland and Washtenaw counties. Pulse takes
+radio transmissions from your own SDR receivers, transcribes them on the CPU, extracts
+locations, incident types, units and railroad context with one batched Claude Haiku 5.5
+call, geocodes with free providers, correlates transmissions into incidents, and serves
+them to a MapLibre map and to the godseye gateway's MCP tools.
 
-Built as a personal project alongside school. Non-commercial.
-
----
-
-## How it works
-
-The system listens to scanner radio continuously. When a call comes in, it transcribes the audio, figures out the address, geocodes it, classifies the incident, and correlates it with any other transmissions about the same event. The whole thing takes a few seconds from when the dispatcher speaks to when the dot appears on the map.
-
-The hardest part is not the transcription. It's figuring out that two separate radio transmissions 9 seconds apart are both about the same structure fire on 8 Mile, not two different incidents.
-
----
-
-## Pipeline
+Personal, non-commercial project. Runs on a shared home server without a GPU.
 
 ```
-Broadcastify streams
-        |
-  1. Audio Ingest        -- 30-second chunks from 15+ CDN streams
-        |
-  2. Whisper large-v3    -- local transcription
-        |
-  3. Address Normalize   -- Qwen2.5-7B + LoRA adapter
-        |
-  4. Geocoding           -- Photon (primary), Google (fallback)
-        |
-  5. Incident Structure  -- type, priority, units extracted via LLM
-        |
-  6. Correlation Engine  -- signal scoring + LLM judge
-        |
-  7. WebSocket           -- live events to React/Mapbox frontend
+rtl_airband / trunk-recorder ──▶ faster-whisper (CPU int8) ──▶ prefilter ──▶ Claude Haiku 5.5 (10 per call)
+traintap (EOT/HOT) ──▶ rail_telemetry          rules fallback ◀── caps/errors ──┘        │
+                                                $0 geocoders ◀── structured location ◀──┘
+                                                correlation (deterministic) ──▶ PostGIS ──▶ API 127.0.0.1:7710
 ```
 
----
+Docs: [architecture](docs/architecture.md) · [SDR ingest](docs/sdr-ingest.md) ·
+[cost controls](docs/cost-controls.md) · [API](docs/pulse-api.md)
 
-## Stack
+## What changed in the 2026-11 rework
 
-| Layer | Tech |
-|-------|------|
-| Transcription | Whisper large-v3 |
-| LLM | Qwen2.5-7B-Instruct via Ollama |
-| Address normalization | Qwen2.5-7B + QLoRA (custom trained) |
-| Geocoding | Photon, Google Geocoding API |
-| Backend | FastAPI, Python 3.12 |
-| Database | PostgreSQL |
-| Cache / pub-sub | Redis |
-| Frontend | React, Mapbox GL JS, Vite |
+| Before | Now |
+|---|---|
+| Broadcastify CDN streams via ffmpeg, 25 s chunks | Own receivers: rtl_airband one-file-per-transmission (+ trunk-recorder), traintap EOT/HOT. Broadcastify capture removed (Terms §9 forbid automated capture and AI transcription). |
+| Whisper large-v3 on CUDA fp16, torch | faster-whisper small.en (or medium.en) on CPU int8, Silero VAD via onnxruntime, no torch |
+| Qwen2.5-7B + LoRA via Ollama, 3-6 calls per chunk | One structured Claude Haiku 5.5 call per 10 transmissions, rule prefilter, daily/monthly caps, rules-only fallback |
+| Google geocoding | $0 chain: local OSM index (adapter), US Census, Photon, optional Nominatim |
+| Redis-held incidents, three resolvers | Postgres/PostGIS is the source of truth; one resolver |
+| Mapbox (token) | MapLibre + OpenFreeMap (keyless) |
+| Unauthenticated /admin and /audio/stream | Bearer-token API, admin off unless configured, no audio relay |
 
----
+## Requirements
 
-## The LoRA adapter
-
-Address normalization is where I spent the most time. Scanner radio is not natural language. It's full of unit callsigns, signal codes, floor numbers, and round counts that a general LLM reads as street addresses. The base Qwen model hallucinated an address in about half the cases where the right answer was `NO_LOCATION`.
-
-I built a QLoRA fine-tuning pipeline to fix this. The training data comes from a combination of auto-labeled high-confidence geocodes, Claude Sonnet reviewed corrections, and hand-crafted hard negatives targeting the specific failure modes.
-
-The most interesting finding: removing the auto-labeled examples where Qwen had already gotten the address right and training only on the cases where the model had something to learn produced better results with 10x less data. Training on what the model already knows does nothing.
-
-The labeling pipeline uses Claude Sonnet to auto-review ambiguous transcripts at scale, targeting mile-road hallucinations, MEDIUM confidence geocodes, and NO_LOCATION predictions from high-activity feeds.
-
-Training infrastructure lives in `lora/` and supports automatic GPU profile detection, quality-gated dataset export, offline eval, shadow mode deployment, and gated promotion with instant rollback.
-
----
-
-## Correlation engine
-
-Two-layer approach:
-
-**Signal scoring** -- six weighted signals produce a score per candidate incident: address token overlap, geocode proximity, unit ID match, incident type match, burst window (same feed within 30s), same feed bonus. Above 0.85 merges automatically. Below 0.20 creates a new incident.
-
-**LLM judge** -- scores between 0.20 and 0.85 go to Qwen with both transcripts for a binary same/different decision. The judge is prompted conservatively; it needs explicit evidence to merge, not just absence of evidence to split.
-
-High-volume feeds (Detroit Police/Fire, Wayne County) get stricter treatment because they see the most duplicate transmissions.
-
----
-
-## Feeds
-
-**Wayne County:** Detroit Police/Fire, DPD Dispatch, Detroit Fire, Detroit EMS, Plymouth-Northville, Northville City, Downriver, Wayne County Public Safety
-
-**Oakland County:** Oakland County dispatch
-
-**Washtenaw County:** Washtenaw County dispatch
-
----
+* Ubuntu 22.04 (or similar), Docker with `docker-compose` (v1 or v2), [uv](https://docs.astral.sh/uv/),
+  Node 20.19+ for the UI build.
+* Ports on 127.0.0.1: 5436 (PostGIS), 6381 (Redis), 7710 (API).
+* For live data: RTL-SDR receivers running rtl_airband and/or traintap (see
+  [docs/sdr-ingest.md](docs/sdr-ingest.md)). Without them, use the fixture source.
 
 ## Setup
 
-### Prerequisites
+```bash
+cp .env.example .env && chmod 600 .env   # set ANTHROPIC_API_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD,
+                                          # PULSE_API_TOKEN (shared with the gateway)
+uv sync                                   # Python 3.12, CPU-only dependencies from uv.lock
+docker-compose up -d                      # PostGIS 127.0.0.1:5436, Redis 127.0.0.1:6381
+uv run alembic upgrade head               # fresh schema
 
-- Python 3.12
-- Node.js 20+
-- PostgreSQL 15+
-- Redis 7+
-- Ollama with `qwen2.5:7b-instruct` pulled
-- Broadcastify premium account
-- Google Geocoding API key (optional)
+# local, gitignored config (the committed files are generic examples):
+cp config/areas.yaml config/areas.local.yaml          # your coverage areas + street vocab
+cp config/channels.yaml config/channels.local.yaml    # your SDR channels
+uv run python scripts/import_fcc_uls.py --uls-dir /path/to/l_LMpriv   # rail plan from FCC ULS
+uv run python scripts/build_fewshots.py --train /path/to/normalize_train.jsonl \
+    --eval /path/to/normalize_eval.jsonl                               # TRAIN-only few-shots
 
-### Environment
-
-Copy `.env.example` to `.env`:
-
-```env
-DATABASE_URL=postgresql://user:pass@localhost:5432/detroitpulse
-REDIS_URL=redis://localhost:6379/0
-OLLAMA_BASE_URL=http://localhost:11434
-GOOGLE_GEOCODING_API_KEY=
-BROADCASTIFY_USERNAME=
-BROADCASTIFY_PASSWORD=
-
-LORA_BASE_MODEL=qwen2.5:7b-instruct
-LORA_NORMALIZE_MODEL=detroit-normalize-v4
-LORA_NORMALIZE_ENABLED=false
-LORA_SHADOW_MODE=false
+# UI (served by the gateway from frontend/dist at /pulse/)
+cd frontend && npm ci && nice -n 19 npx vite build && cd ..
 ```
 
-### Install
+Optional: restore the old database for analysis only (never into the live DB):
+`scripts/restore_archive.sh /path/to/detroitpulse.dump` creates `detroitpulse_archive`.
+
+## Run
 
 ```bash
-# Database
-psql $DATABASE_URL -f db/schema.sql
-
-# Python
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Frontend
-cd frontend && npm install && npm run build
+./start.sh                    # compose + migrations + API + pipeline, all at nice 19
+./start.sh api                # API only
+STAGES=extract,resolver ./start.sh
+./stop.sh                     # stop API + pipeline (add --services to stop the containers)
 ```
 
-### Run
+Or by hand:
 
 ```bash
-./start.sh
-./stop.sh
+nice -n 19 uv run python -m api                                   # 127.0.0.1:7710
+nice -n 19 uv run python run_pipeline.py                          # ingest, transcribe, extract, resolver
+uv run python run_pipeline.py --stages ingest,extract --sources fixture   # demo without radios
 ```
 
----
+Gateway side (`godseye-detroit-connector`): `PULSE_URL=http://127.0.0.1:7710`, the same
+`PULSE_API_TOKEN`, `PULSE_STATIC_DIR=<repo>/frontend/dist`, `PULSE_API_PROXY=true`.
+For UI development, `cd frontend && npm run dev` proxies `/pulse/api` to the local API.
 
-## Training your own adapter
+## Tests and evals
 
 ```bash
-# Label data
-python lora/auto_label.py --limit 500
-
-# Export dataset
-python lora/export_dataset.py
-
-# Train
-python lora/train_lora.py
-
-# Export for Ollama
-python lora/export_gguf.py --version normalize-v1
-
-# Eval
-python lora/eval_baseline.py --lora-model detroit-normalize-v1
-
-# Shadow mode then promote
-python lora/promote_model.py --version normalize-v1
+uv run pytest -m "not whisper"          # unit + DB tests (uses detroitpulse_test; mocked Claude)
+nice -n 19 uv run pytest -m whisper     # real faster-whisper run from a local model cache
+uv run python scripts/measure_prefilter.py --train …/normalize_train.jsonl --archive-db detroitpulse_archive
+uv run python scripts/eval_extract.py --eval …/normalize_eval.jsonl --mock rules   # $0
+uv run python scripts/eval_extract.py --eval …/normalize_eval.jsonl --real --limit 10   # one real batch, <= $0.25 meter
 ```
 
-GPU profile is auto-detected. Override with `GPU_PROFILE=a100` or `GPU_PROFILE=4070`.
+No test ever calls the real Claude API; the eval's real mode runs exactly one batch under
+its own spend meter.
 
----
+## Privacy and licensing
 
-## Notes
+* This repository is public. Personal coverage points, real channel plans and few-shot
+  transcripts go only in gitignored `config/*.local.*` files; never commit `.env`, audio,
+  dumps or `data/`.
+* No Broadcastify audio, no RadioReference data (its terms forbid AI/ML use), no Google
+  geocoding results.
+* Map tiles: © OpenStreetMap contributors, OpenMapTiles, served by OpenFreeMap.
 
-Not affiliated with any law enforcement agency, municipality, or Broadcastify. Non-commercial use only.
+## Repository layout
 
-Scanner data is public by nature. These are unencrypted radio transmissions. The dashboard does not store audio or provide any capability beyond what anyone with a radio scanner already has access to.
+| Path | |
+|---|---|
+| `core/` | settings, DB, Redis bus, YAML config loaders, durable work queue |
+| `ingest/` | sources: `sdr_files`, `traintap`, `fixture`, disabled `broadcastify_legacy` |
+| `transcribe/` | faster-whisper worker and vocabulary prompt |
+| `extract/` | prefilter, batched Claude extractor, schema, prompt, cost meter, rules fallback, summaries, worker |
+| `rail/` | defect-detector parser, EOT interpretation, spoken-number parsing |
+| `geocode/` | provider interface, local/Census/Nominatim/Photon, Postgres cache, chain |
+| `correlation/` | deterministic correlation engine and resolver |
+| `api/` | FastAPI app: `/v1` gateway contract, UI routes, admin, WebSocket |
+| `db/` | ORM models, alembic migrations, `schema.sql` reference |
+| `frontend/` | React + MapLibre UI (Vite, base `/pulse/`) |
+| `scripts/` | archive restore, FCC ULS import, few-shot builder, prefilter and extraction evals |
+| `lora/` | legacy QLoRA/Ollama tooling from the GPU era; not used by this pipeline and its dependencies aren't installed |
