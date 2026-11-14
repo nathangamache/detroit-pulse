@@ -46,7 +46,7 @@ from core.db import reset_engine  # noqa: E402
 from core.settings import get_settings, reset_settings_cache  # noqa: E402
 
 TABLES = ["rail_detector_events", "transcript_chunks", "incidents", "rail_telemetry", "llm_usage",
-          "geocode_cache", "pipeline_events"]
+          "geocode_cache", "pipeline_events", "liveness"]
 
 
 def _db_available() -> bool:

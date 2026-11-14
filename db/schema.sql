@@ -73,6 +73,16 @@ CREATE TABLE public.incidents (
     summary_updated_at timestamp with time zone
 );
 
+-- Name: liveness; Type: TABLE; Schema: public; Owner: -
+
+CREATE TABLE public.liveness (
+    component character varying(120) NOT NULL,
+    up_since timestamp with time zone NOT NULL,
+    last_seen timestamp with time zone NOT NULL,
+    fingerprint text DEFAULT ''::text NOT NULL,
+    detail jsonb
+);
+
 -- Name: llm_usage; Type: TABLE; Schema: public; Owner: -
 
 CREATE TABLE public.llm_usage (
@@ -397,6 +407,11 @@ ALTER TABLE ONLY public.geocode_cache
 ALTER TABLE ONLY public.incidents
     ADD CONSTRAINT incidents_pkey PRIMARY KEY (incident_id);
 
+-- Name: liveness liveness_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+
+ALTER TABLE ONLY public.liveness
+    ADD CONSTRAINT liveness_pkey PRIMARY KEY (component, up_since);
+
 -- Name: llm_usage llm_usage_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 
 ALTER TABLE ONLY public.llm_usage
@@ -530,6 +545,10 @@ CREATE INDEX ix_incidents_status_updated ON public.incidents USING btree (status
 -- Name: ix_incidents_units; Type: INDEX; Schema: public; Owner: -
 
 CREATE INDEX ix_incidents_units ON public.incidents USING gin (units);
+
+-- Name: ix_liveness_last_seen; Type: INDEX; Schema: public; Owner: -
+
+CREATE INDEX ix_liveness_last_seen ON public.liveness USING btree (last_seen);
 
 -- Name: ix_llm_usage_ts; Type: INDEX; Schema: public; Owner: -
 

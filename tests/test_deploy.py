@@ -106,21 +106,30 @@ def test_setup_pins_and_checks_godseye_backend():
 
 def test_receiver_heartbeats_reach_the_api_read_only_without_network():
     """rtl_airband's stats file and traintap's heartbeat land in pulse_receivers, which pulse-api
-    reads (core/receivers.py). Nothing gains a network or a port."""
+    reads (core/receivers.py) and pulse-transcribe's ingest stage records as history
+    (core/liveness.py), both read-only. Nothing gains a network or a port."""
     c = _compose()
     svcs = c["services"]
     assert c["volumes"]["pulse_receivers"] == {"name": "pulse_receivers"}
     api_env = svcs["pulse-api"]["environment"]
     assert "pulse_receivers:/data/receivers:ro" in svcs["pulse-api"]["volumes"]
     assert api_env["RECEIVER_STATUS_DIR"] == "/data/receivers"
+    # the ingest stage (sdr_files, traintap) records the receivers' heartbeats with its own
+    tr = svcs["pulse-transcribe"]
+    assert "pulse_receivers:/data/receivers:ro" in tr["volumes"]
+    assert tr["environment"]["RECEIVER_STATUS_DIR"] == "/data/receivers"
+    assert "ingest" in tr["command"][tr["command"].index("--stages") + 1].split(",")
     assert "pulse_receivers:/status" in svcs["rail-airband"]["volumes"]
     assert "pulse_receivers:/status" in svcs["traintap-eot"]["volumes"]
     cmd = svcs["traintap-eot"]["command"]
     assert cmd[cmd.index("--heartbeat") + 1] == "/status/traintap-eot.heartbeat"
     assert 'stats_filepath = "/status/rail-airband.prom";' in (REPO / "deploy" / "sdr" / "rail.conf").read_text()
-    # only pulse-api (read-only) and the two SDR writers mount it; the SDR side stays offline
+    # only the two readers (read-only) and the two SDR writers mount it; the SDR side stays offline
     users = {n for n, s in svcs.items() if any(str(v).startswith("pulse_receivers:") for v in s.get("volumes", []))}
-    assert users == {"pulse-api", "rail-airband", "traintap-eot"}
+    assert users == {"pulse-api", "pulse-transcribe", "rail-airband", "traintap-eot"}
+    for reader in ("pulse-api", "pulse-transcribe"):
+        assert [v for v in svcs[reader]["volumes"] if str(v).startswith("pulse_receivers:")] == [
+            "pulse_receivers:/data/receivers:ro"], reader
     for sdr in ("rail-airband", "traintap-eot"):
         assert svcs[sdr]["network_mode"] == "none" and not svcs[sdr].get("ports")
     # the image creates the mount point the volume copies its owner/mode from

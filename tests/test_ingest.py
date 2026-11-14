@@ -185,3 +185,74 @@ def test_broadcastify_legacy_never_runs(monkeypatch):
     src = BroadcastifyLegacySource()
     assert src.poll_once() == 0
     assert "Terms" in src.status()["warning"] and src.status()["enabled"] is False
+
+
+# ── ingest heartbeat (core/liveness.py) ────────────────────────────────────
+
+def _liveness(db) -> dict[str, tuple]:
+    with db.connect() as c:
+        return {r[0]: (r[1], r[2]) for r in c.execute(text(
+            "SELECT component, fingerprint, detail FROM liveness ORDER BY component, up_since")).all()}
+
+
+def test_sdr_watcher_beats_with_its_receivers_and_what_is_recording_now(db, channels, tmp_path, monkeypatch):
+    """After each completed poll the watcher beats (about every INGEST_HEARTBEAT_S): it says
+    what is still being written (radio traffic right now) and records its receivers' heartbeat."""
+    from core.settings import reset_settings_cache
+    status = tmp_path / "receivers"
+    status.mkdir()
+    (status / "rail-airband.prom").write_text('channel_activity_counter{freq="160.215",label="test_rail"}\t0\n')
+    monkeypatch.setenv("RECEIVER_STATUS_DIR", str(status))
+    reset_settings_cache()
+    missing = SdrFileSource(watch_dir=tmp_path / "nope", min_age_s=1.5)
+    missing.poll_once()
+    assert missing.maybe_beat() is True
+    assert _liveness(db)["ingest:sdr_files"][0] == "blind:no_watch_dir"     # can't see its input
+
+    watch = tmp_path / "sdr" / "2026" / "11" / "14"
+    watch.mkdir(parents=True)
+    (watch / "aa_fire_20261114_153100.mp3.tmp").write_bytes(b"ID3partial")   # a transmission right now
+    stale = watch / "aa_fire_20261114_120000.mp3.tmp"                         # left behind by a crash
+    stale.write_bytes(b"ID3")
+    _old(stale, 3600)
+    (watch / "rail_road_20261114_153300_160215000.mp3").write_bytes(b"ID3")  # closed a moment ago
+    (watch / "off_20261114_153400.mp3.tmp").write_bytes(b"ID3")             # a disabled channel
+    src = SdrFileSource(watch_dir=tmp_path / "sdr", min_age_s=1.5)
+    assert src.poll_once() == 0
+    assert src.recording_now == {"aa_fire": 1, "test_rail": 1}
+    assert src.maybe_beat() is True and src.maybe_beat() is False            # once per INGEST_HEARTBEAT_S
+    rows = _liveness(db)
+    assert rows["ingest:sdr_files"] == ("", {"recording_now": {"aa_fire": 1, "test_rail": 1}, "ingested": 0})
+    assert rows["receiver:rail-airband"][0] == "test_rail@160.2150"
+    _old(watch / "rail_road_20261114_153300_160215000.mp3")
+    os.rename(watch / "aa_fire_20261114_153100.mp3.tmp", watch / "aa_fire_20261114_153100.mp3")
+    _old(watch / "aa_fire_20261114_153100.mp3")
+    assert src.poll_once() == 2 and src.recording_now == {}
+    assert src.maybe_beat(force=True) is True
+    assert _liveness(db)["ingest:sdr_files"][1]["recording_now"] == {}
+
+
+def test_traintap_beats_only_while_it_can_see_the_csv(db, tmp_path, monkeypatch):
+    from core.settings import reset_settings_cache
+    monkeypatch.setenv("RECEIVER_STATUS_DIR", str(tmp_path / "receivers"))
+    reset_settings_cache()
+    csvf = tmp_path / "trains.csv"
+    src = TraintapSource(csv_path=csvf, channel="eot_hot")
+    assert src.poll_once() == 0 and src.maybe_beat() is True
+    assert _liveness(db)["ingest:traintap"][0] == "blind:no_csv"
+    assert src.receiver_names() == {"traintap-eot"}
+    csvf.write_text(HEADER)
+    assert src.poll_once() == 0 and src.maybe_beat(force=True) is True
+    with db.connect() as c:
+        fps = [r[0] for r in c.execute(text("SELECT fingerprint FROM liveness WHERE component = 'ingest:traintap' "
+                                            "ORDER BY up_since")).all()]
+    assert fps == ["blind:no_csv", ""]                                       # a new run once it can see it
+
+
+def test_a_failed_heartbeat_never_stops_ingestion(tmp_path, monkeypatch):
+    src = SdrFileSource(watch_dir=tmp_path, min_age_s=1.5)
+
+    def boom():
+        raise RuntimeError("db down")
+    monkeypatch.setattr(src, "beat", boom)
+    assert src.maybe_beat() is False

@@ -41,6 +41,9 @@ from ingest.sources.base import Source
 log = structlog.get_logger()
 
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
+# A `.tmp` file rtl_airband is still writing (a transmission in progress) has a fresh mtime; one
+# left behind by a crash doesn't, and is not counted as recording now.
+TMP_ACTIVE_S = 120.0
 
 _AIRBAND_RE = re.compile(
     r"^(?P<template>.+?)"
@@ -125,20 +128,36 @@ class SdrFileSource(Source):
         self.last_ingest: datetime | None = None
         self.ingested = 0
         self.last_by_channel: dict[str, datetime] = {}
+        self.recording_now: dict[str, int] = {}          # channel id -> files still being written
 
     def _candidates(self):
+        """(path, in_progress) for every audio file; in_progress for `<name>.<ext>.tmp`."""
         if not self.watch_dir.exists():
             return
         for root, _dirs, files in os.walk(self.watch_dir):
             for f in files:
                 p = Path(root) / f
-                if p.suffix.lower() in AUDIO_EXTS:        # *.mp3.tmp has suffix .tmp -> skipped
-                    yield p
+                if p.suffix.lower() in AUDIO_EXTS:
+                    yield p, False
+                elif p.suffix.lower() == ".tmp" and Path(p.stem).suffix.lower() in AUDIO_EXTS:
+                    yield p, True
+
+    def _channel_for(self, p: Path) -> str | None:
+        """The channel id a recording would be ingested as (None: skipped, e.g. disabled)."""
+        parsed = parse_name(p, self.tz)
+        if parsed is None:
+            return None
+        ch = match_channel(parsed.template, parsed.freq_hz, parsed.talkgroup)
+        if ch is not None:
+            return ch.id if ch.enabled else None
+        label = parsed.template or (f"tg{parsed.talkgroup}" if parsed.talkgroup else f"{parsed.freq_hz}")
+        return f"unmapped:{label}"
 
     def poll_once(self) -> int:
         n = 0
         now = datetime.now(timezone.utc).timestamp()
-        for p in self._candidates():
+        recording: dict[str, int] = {}
+        for p, in_progress in self._candidates():
             key = str(p.resolve())
             if key in self._seen:
                 continue
@@ -146,12 +165,29 @@ class SdrFileSource(Source):
                 st = p.stat()
             except OSError:
                 continue
-            if st.st_size == 0 or now - st.st_mtime < self.min_age_s:
-                continue                                   # still being written
+            if in_progress or st.st_size == 0 or now - st.st_mtime < self.min_age_s:
+                # still being written: radio traffic now, ingested once the file is closed
+                if not in_progress or now - st.st_mtime <= TMP_ACTIVE_S:
+                    cid = self._channel_for(p.with_name(p.stem) if in_progress else p)
+                    if cid:
+                        recording[cid] = recording.get(cid, 0) + 1
+                continue
             if self._ingest(p, key):
                 n += 1
             self._seen.add(key)
+        self.recording_now = recording
         return n
+
+    # ── heartbeat (core/liveness.py) ────────────────────────────────────────
+    def blind_reason(self) -> str | None:
+        return None if self.watch_dir.is_dir() else "no_watch_dir"
+
+    def beat_detail(self) -> dict:
+        return {"recording_now": dict(self.recording_now), "ingested": self.ingested}
+
+    def receiver_names(self) -> set[str]:
+        from core.config_files import load_channels
+        return {c.receiver_name for c in load_channels() if c.enabled and c.kind != "eot" and c.receiver_name}
 
     def _warn_once(self, k: str, msg: str, **kw) -> None:
         if k not in self._warned:

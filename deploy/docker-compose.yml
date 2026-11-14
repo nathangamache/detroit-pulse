@@ -4,14 +4,17 @@
 #   pulse-redis       Redis 7 (existing data volume), internal network only
 #   pulse-api         FastAPI :7710 on pulse_internal + godseye_backend (the gateway's PULSE_URL
 #                     http://pulse-api:7710); runs migrations first. Nothing is published.
-#   pulse-transcribe  ingest + faster-whisper (8 threads, nice 19)
+#   pulse-transcribe  ingest + faster-whisper (8 threads, nice 19); the ingest stage also records its
+#                     heartbeat and the receivers' (pulse_receivers, read-only) in Postgres `liveness`,
+#                     which /v1/rail/activity needs before it calls a window quiet
 #   pulse-extract     extraction (Claude batch, or rules-only without a key) + resolver + local geocoder
 #   profiles:
 #     frontend        pulse-frontend: one-shot copy of the built UI into the pulse_frontend volume
 #     debug           pulse-debug: 127.0.0.1-only ports 7710/5436/6381 (TCP forwarder)
 #     sdr             rail-airband + traintap-eot on two RTL-SDR Blog V3s (serials RAIL160, EOT457);
-#                     both write a heartbeat into pulse_receivers, which pulse-api reads (read-only)
-#                     for /v1/feeds/status `receiver` (docs/sdr-ingest.md#6-receiver-heartbeats)
+#                     both write a heartbeat into pulse_receivers, which pulse-api (for /v1/feeds/status
+#                     `receiver`) and pulse-transcribe (heartbeat history) read, read-only
+#                     (docs/sdr-ingest.md#6-receiver-heartbeats)
 #
 #   cd deploy
 #   ./setup.sh                                   # network, volumes, mode-600 secrets (once)
@@ -190,6 +193,7 @@ services:
     volumes:
       - pulse_sdr:/data/sdr
       - pulse_traintap:/data/traintap:ro
+      - pulse_receivers:/data/receivers:ro   # receiver heartbeats, recorded with the ingest heartbeat
       - pulse_models:/models
       - "${PULSE_CONFIG_DIR:-../config}:/app/config:ro"
     tmpfs: ["/tmp:size=256m,mode=1777"]

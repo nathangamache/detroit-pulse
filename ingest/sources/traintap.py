@@ -185,6 +185,20 @@ class TraintapSource(Source):
         return EotReading(ts=r[0], unit_id=unit_id, brake_pipe_psig=r[1], motion=r[2], source=source,
                           message_type=r[3])
 
+    # ── heartbeat (core/liveness.py) ────────────────────────────────────────
+    def blind_reason(self) -> str | None:
+        """Without traintap's CSV there is nothing to tail: the receiver may be writing
+        somewhere else, so its silence proves nothing."""
+        return None if self.path.is_file() else "no_csv"
+
+    def beat_detail(self) -> dict:
+        return {"ingested": self.ingested, "channel": self.channel}
+
+    def receiver_names(self) -> set[str]:
+        from core.config_files import load_channels
+        names = {c.receiver_name for c in load_channels() if c.enabled and c.kind == "eot" and c.receiver_name}
+        return names or {"traintap-eot"}
+
     def status(self) -> dict:
         return {"source": self.name, "csv": str(self.path), "exists": self.path.exists(),
                 "ingested": self.ingested, "heartbeat_age_s": self.heartbeat_age_s(),

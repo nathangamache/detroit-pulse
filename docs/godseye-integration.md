@@ -202,7 +202,10 @@ or volume is missing). Notes:
   `not_configured`), so the gateway can say "no receiver yet" instead of "quiet"
   ([pulse-api.md](pulse-api.md#feeds_status)). The fields are additive: the gateway treats their
   absence (an older Pulse) as unknown. `/v1/rail/activity` reports `covered: false` until a
-  receiver has reported for one of the line's channels.
+  receiver has reported for one of the line's channels, and `verdicts` (contract v1.2) per
+  kind: `activity`, `quiet` (only on proof for the whole window), `not_covered` or `unknown`,
+  with `reasons` and `counts` for the gateway to relay ([pulse-api.md](pulse-api.md#rail_activity_near),
+  item 8).
 * UI files are world-readable (644/755) and owned by uid 10010, so the gateway's uid 10001 can
   read them through the read-only mount.
 
@@ -219,9 +222,11 @@ Profile `sdr`, off by default (no hardware yet). Two RTL-SDR Blog V3 dongles:
 online, channel quiet" from "no receiver" (`receiver.state`, `coverage_summary`; see
 [pulse-api.md](pulse-api.md#feeds_status) and [sdr-ingest.md](sdr-ingest.md#6-receiver-heartbeats)).
 They go into their own small volume, `pulse_receivers`: the SDR containers mount it at `/status`
-(rtl_airband's global `stats_filepath`, traintap's `--heartbeat`), and `pulse-api` mounts it
-read-only at `/data/receivers` (`RECEIVER_STATUS_DIR`), so the API container never sees the
-recordings. Nothing gains a network or a port: the SDR containers stay `network_mode: none`. The
+(rtl_airband's global `stats_filepath`, traintap's `--heartbeat`), and `pulse-api` and
+`pulse-transcribe` mount it read-only at `/data/receivers` (`RECEIVER_STATUS_DIR`), so the API
+container never sees the recordings. `pulse-transcribe`'s ingest stage records the files'
+history, with its own heartbeat, in the `liveness` table: `/v1/rail/activity` calls a window
+quiet only when that history covers all of it ([sdr-ingest.md §8](sdr-ingest.md#8-heartbeat-history-and-the-ingest-heartbeat)). Nothing gains a network or a port: the SDR containers stay `network_mode: none`. The
 empty volume takes its owner and mode (`pulse:pulse-sdr`, `2775`) from the image's
 `/data/receivers` when `pulse-api` first mounts it (checked: this also happens for a read-only
 mount). Until the `sdr` profile runs, no file exists and every feed is `not_installed`.
@@ -265,7 +270,10 @@ docker run --rm --network none -v pulse_receivers:/v:ro --entrypoint ls detroit-
 The `pulse_receivers` mount on `pulse-api` came with the receiver heartbeat change (2026-11-14):
 after pulling it, rebuild `detroit-pulse:0.2.0` (the image creates `/data/receivers`) and run
 `docker-compose -p pulse up -d`, which recreates `pulse-api` (and the workers, whose image changed)
-and creates the volume.
+and creates the volume. The same holds for the read-only mount on `pulse-transcribe` and the
+`liveness` migration (rail activity verdicts): rebuild, then `up -d` (`pulse-api` runs the
+migration first). Until pulse-transcribe has beaten for as long as the window asked about,
+`verdicts` say `unknown`, never `quiet`.
 
 `deploy/sdr/rail.conf` (committed) has an **empty channel list**, so no frequencies are in the
 public repo; each rendered channel uses `split_on_transmission`, `include_freq`,

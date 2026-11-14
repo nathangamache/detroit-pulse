@@ -15,7 +15,8 @@
 #       (rail_voice = a railroad voice frequency whose use isn't confirmed on air yet)
 # unit_prefix  namespaces unit IDs across agencies in correlation (e.g. "AAFD:Engine 5")
 # bias         geocoder bias point; else the area's center, else areas.default_bias
-#              (eot: the receiver's location; /v1/rail/activity shows telemetry within 25 km)
+#              (eot: the receiver's location; give it coverage.radius_km too: /v1/rail/activity
+#              attributes its telemetry only to points within that radius, none without one)
 # vocab        extra whisper hints for this channel (public street/place names)
 #
 # For /v1/feeds/status (docs/pulse-api.md#feeds_status):
@@ -24,6 +25,8 @@
 #              Default: rail-airband for rail_* voice kinds, traintap-eot for eot, none otherwise.
 # coverage     what it hears: {area, radius_km, lines: [{railroad, name, aliases: [...]}]}; aliases
 #              are the same track's names in other datasets (FRA vs NARN). Default: from the rail plan.
+#              radius_km is its reach: around `bias` (or the `area_id` area), else from the center of
+#              each subdivision it is on (never beyond that subdivision's own area).
 # example      true for a placeholder (as is any id starting "example_"): reported with
 #              "example": true and never counted in coverage_summary.
 #

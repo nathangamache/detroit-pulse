@@ -8,6 +8,7 @@ Table roles:
   llm_usage           one row per Claude API response (cost meter)
   geocode_cache       results from the $0 geocoders, with the provider that answered
   pipeline_events     cap hits, degradations, source health
+  liveness            receiver and ingest heartbeat runs (core/liveness.py), for rail verdicts
 Legacy tables kept for the archive: shadow_log, pipeline_metrics, lora_model_registry.
 """
 from __future__ import annotations
@@ -345,4 +346,16 @@ class PipelineEvent(Base):
     detail = Column(JSONB)
 
 
+class Liveness(Base):
+    """One unbroken run of heartbeats of a receiver or an ingest source (core/liveness.py)."""
+    __tablename__ = "liveness"
+
+    component = Column(String(120), primary_key=True)
+    up_since = Column(DateTime(timezone=True), primary_key=True)
+    last_seen = Column(DateTime(timezone=True), nullable=False)
+    fingerprint = Column(Text, nullable=False, server_default="")
+    detail = Column(JSONB)
+
+
 Index("ix_llm_usage_ts", LlmUsage.ts)
+Index("ix_liveness_last_seen", Liveness.last_seen)

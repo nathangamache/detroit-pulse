@@ -100,8 +100,12 @@ queued ──transcribe──▶ transcribed ──extract──▶ done
   FRA vs NARN) so a lookup by either name finds the line.
 * Receivers (`core/receivers.py`): rtl_airband's stats file and traintap's heartbeat, written
   even while the channels are silent, give every feed a `receiver.state` (`not_installed` /
-  `offline` / `online`) in `/v1/feeds/status`, so "no transcripts" can be read as "quiet" only
-  when a receiver is actually listening ([sdr-ingest.md](sdr-ingest.md#6-receiver-heartbeats)).
+  `offline` / `online`) in `/v1/feeds/status` ([sdr-ingest.md](sdr-ingest.md#6-receiver-heartbeats)).
+  That is "listening now". `/v1/rail/activity` `verdicts` (`api/rail_verdicts.py`) call a point
+  quiet only on proof for the whole window: every channel whose own area covers it was listened
+  to on its configured frequency since before the window, by the heartbeat history the ingest
+  stage records in `liveness` (`core/liveness.py`, [sdr-ingest.md](sdr-ingest.md#8-heartbeat-history-and-the-ingest-heartbeat)),
+  the ingest stage itself beat as long, and nothing was heard.
 
 ## Data model
 
@@ -114,6 +118,7 @@ queued ──transcribe──▶ transcribed ──extract──▶ done
 | `llm_usage` | One row per Claude response: tokens by kind, cost, stop reason, request id. |
 | `geocode_cache` | $0 geocoder results and misses, with `source`. |
 | `pipeline_events` | Cap hits, admin resets. |
+| `liveness` | Runs of receiver and ingest heartbeats (`up_since` .. `last_seen`, the channel list as a fingerprint), written by the ingest stage; `/v1/rail/activity` `verdicts` read them. |
 | `shadow_log`, `pipeline_metrics`, `lora_model_registry` | Legacy tables kept so the archive and the live schema match. |
 
 Migrations: `db/migrations` (alembic). The baseline keeps the original revision id, so

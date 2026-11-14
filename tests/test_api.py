@@ -14,7 +14,8 @@ CHANNELS = {"channels": [
     {"id": "aa_fire", "label": "Test fire dispatch", "kind": "fire", "county": "Washtenaw", "city": "Ann Arbor"},
     {"id": "csx_road", "label": "CSX Test Sub road", "kind": "rail_road", "railroad": "CSX",
      "subdivision": "Test Sub", "freq_mhz": 160.215},
-    {"id": "eot_hot", "label": "EOT/HOT telemetry", "kind": "eot", "freq_mhz": 457.9375},
+    {"id": "eot_hot", "label": "EOT/HOT telemetry", "kind": "eot", "freq_mhz": 457.9375,
+     "bias": {"lat": 42.25, "lon": -83.70}, "coverage": {"radius_km": 10}},
 ]}
 RAIL = {"railroads": {"CSX": {"subdivisions": {"Test Sub": {
     "center": {"lat": 42.25, "lon": -83.70}, "radius_km": 8,
@@ -131,13 +132,24 @@ def test_rail_activity(seeded):
     assert {"emergency", "signal_stop", "meet_pass", "defect_detector_stop"} <= set(rl)
     assert all(0 <= x["confidence"] <= 1 for x in r["reason_labels"])
     assert {c["receiver_state"] for c in r["coverage"]["channels"]} == {"online"}   # recordings / packets just now
+    v = r["verdicts"]
+    assert v["rail_voice"]["state"] == "activity" and v["eot"]["state"] == "activity"
+    assert v["rail_voice"]["counts"] == {"transcripts": 3, "detector_readouts": 1, "recordings_without_text": 0,
+                                         "eot_packets": 0}
+    assert v["eot"]["counts"]["eot_packets"] == 1
+    assert v["rail_voice"]["channels"] == [{"feed_id": "csx_road", "receiver_state": "online", "covers_point": True}]
+    # 75 km from the EOT receiver (10 km radius) and outside the line: nothing covers it
     far = seeded.get("/v1/rail/activity", params={"lat": 42.9, "lon": -83.0}).json()
-    assert far["coverage"]["channels"] == [{"channel": "EOT/HOT telemetry", "frequency_mhz": 457.9375, "kind": "eot",
-                                            "receiver_state": "online"}]
+    assert far["coverage"]["channels"] == [] and far["eot_hot"] == [] and far["coverage"]["covered"] is False
     assert "No monitored rail voice channel" in far["coverage"]["note"]
+    assert "No EOT/HOT receiver covers this point (it is outside every eot channel's coverage radius)" in \
+        far["coverage"]["note"]
+    assert {k: x["state"] for k, x in far["verdicts"].items()} == {"rail_voice": "not_covered", "eot": "not_covered"}
+    assert far["verdicts"]["eot"]["channels"] == [{"feed_id": "eot_hot", "receiver_state": "online",
+                                                   "covers_point": False}]
     # naming the line doesn't bring its traffic to a point outside its area
     hinted = seeded.get("/v1/rail/activity", params={"lat": 42.9, "lon": -83.0, "subdivision": "test"}).json()
-    assert [c["kind"] for c in hinted["coverage"]["channels"]] == ["eot"]
+    assert hinted["coverage"]["channels"] == []
     assert hinted["transcripts"] == [] and hinted["detector_readouts"] == []
     assert ("Pulse monitors the CSX Test Sub line, but no receiver for it covers this point"
             in hinted["coverage"]["note"])
@@ -159,7 +171,7 @@ def test_feeds_status(seeded):
     assert feeds["csx_road"]["receiver"]["device"].startswith("rail-airband")
     assert feeds["eot_hot"]["receiver"]["state"] == "online" and feeds["eot_hot"]["receiver"]["last_seen_at"].endswith("Z")
     assert feeds["csx_road"]["coverage"] == {"lines": [{"railroad": "CSX", "name": "Test Sub", "aliases": []}]}
-    assert feeds["aa_fire"]["coverage"] == {"area": "Ann Arbor"} and feeds["eot_hot"]["coverage"] == {}
+    assert feeds["aa_fire"]["coverage"] == {"area": "Ann Arbor"} and feeds["eot_hot"]["coverage"] == {"radius_km": 10.0}
     assert not any(f["example"] for f in r["feeds"])
     assert r["coverage_summary"] == {"rail_radio": "listening", "eot": "listening", "public_safety": "listening"}
 
@@ -173,10 +185,50 @@ QUIET = {"channels": [
      "freq_mhz": 160.95},
     {"id": "example_fire_dispatch", "label": "Example fire", "kind": "fire"},
     {"id": "eot_hot", "label": "EOT/HOT telemetry", "kind": "eot", "freq_mhz": 457.9375,
-     "bias": {"lat": 42.25, "lon": -83.70}},
+     "bias": {"lat": 42.25, "lon": -83.70}, "coverage": {"radius_km": 8}},
 ]}
 QUIET_RAIL = {"railroads": {"CSX": {"subdivisions": {"Test Sub": {
     "aliases": ["TESTNAME"], "center": {"lat": 42.25, "lon": -83.70}, "radius_km": 8}}}}}
+
+
+ROAD_ONLY = 'channel_activity_counter{freq="160.215",label="csx_road"}\t0\n'
+BOTH_TUNED = ('channel_activity_counter{freq="160.215",label="csx_road"}\t0\n'
+              'channel_activity_counter{freq="160.950",label="csx_yard"}\t0\n')
+NEAR = {"lat": 42.26, "lon": -83.71}
+
+
+def _beats(db, component: str, minutes: float, fingerprint: str = "", detail: dict | None = None,
+           until_s: float = 5) -> None:
+    """Liveness history (core/liveness.py): a beat every 30 s from `minutes` ago to `until_s` ago."""
+    from core import liveness
+    now = datetime.now(timezone.utc)
+    t, end = now - timedelta(minutes=minutes), now - timedelta(seconds=until_s)
+    with db.begin() as c:
+        while t <= end:
+            liveness.beat(c, component, t, fingerprint, detail)
+            t += timedelta(seconds=30)
+
+
+def _listening(db, status, prom: str | None = BOTH_TUNED, minutes: float = 40, eot: bool = True,
+               ingest: bool = True) -> None:
+    """Receivers up now (fresh heartbeat files) with `minutes` of recorded history, and the
+    ingest stage (sdr_files, traintap) beating as long."""
+    from core.liveness import pairs_fingerprint
+    from core.receivers import parse_airband_pairs
+    if prom is not None:
+        (status / "rail-airband.prom").write_text(prom)
+        pairs = parse_airband_pairs(prom)
+        _beats(db, "receiver:rail-airband", minutes, pairs_fingerprint(pairs), {"pairs": [list(p) for p in pairs]})
+    if eot:
+        (status / "traintap-eot.heartbeat").write_text("")
+        _beats(db, "receiver:traintap-eot", minutes)
+    if ingest:
+        _beats(db, "ingest:sdr_files", minutes)
+        _beats(db, "ingest:traintap", minutes)
+
+
+def _states(a: dict) -> dict:
+    return {k: v["state"] for k, v in a["verdicts"].items()}
 
 
 def _receiver_client(cfg_dir, tmp_path, monkeypatch, channels: dict):
@@ -229,12 +281,11 @@ def test_no_receiver_is_not_a_quiet_channel(quiet):
     assert "No EOT/HOT receiver has reported yet" in a["coverage"]["note"]
 
 
-def test_fresh_heartbeat_with_no_traffic_is_quiet(quiet):
+def test_fresh_heartbeat_with_no_traffic_is_quiet(quiet, db):
     import os
     import time
     client, status = quiet
-    (status / "rail-airband.prom").write_text(
-        'channel_activity_counter{freq="160.215",label="csx_road"}\t0\n')
+    (status / "rail-airband.prom").write_text(ROAD_ONLY)
     (status / "traintap-eot.heartbeat").write_text("")
     r = client.get("/v1/feeds/status").json()
     feeds = {f["feed_id"]: f for f in r["feeds"]}
@@ -242,20 +293,33 @@ def test_fresh_heartbeat_with_no_traffic_is_quiet(quiet):
     assert feeds["csx_yard"]["receiver"]["state"] == "not_installed"        # not in rtl_airband's channel list
     assert feeds["eot_hot"]["receiver"]["state"] == "online" and feeds["eot_hot"]["state"] == "up"
     assert r["coverage_summary"] == {"rail_radio": "listening", "eot": "listening", "public_safety": "not_configured"}
-    a = client.get("/v1/rail/activity", params={"lat": 42.26, "lon": -83.71}).json()
+    # a fresh heartbeat alone is "online now", not a quiet window: nothing shows the receiver
+    # (or the ingest stage) listening before it
+    a = client.get("/v1/rail/activity", params=NEAR).json()
     note = a["coverage"]["note"]
-    # rtl_airband doesn't tune csx_yard: only csx_road may be called quiet
+    assert a["coverage"]["covered"] is True and _not_quiet(note) and "can't vouch for 1 of 2 channels" in note
+    assert _states(a) == {"rail_voice": "unknown", "eot": "unknown"}
+    assert any("no heartbeat history" in x for x in a["verdicts"]["rail_voice"]["reasons"])
+    # 40 minutes of history: rtl_airband doesn't tune csx_yard, so only csx_road may be called quiet
+    _listening(db, status, ROAD_ONLY)
+    a = client.get("/v1/rail/activity", params=NEAR).json()
+    note = a["coverage"]["note"]
     assert a["coverage"]["covered"] is True and "they were quiet" not in note
     assert "online for 1 of 2 channels on this line (CSX Test Sub road)" in note and "that channel was quiet" in note
     assert "Not covered: 1 channel with no receiver" in note
-    assert "location not configured" not in note                            # eot has a bias point
-    # once it tunes both, the whole line was quiet
-    (status / "rail-airband.prom").write_text(
-        'channel_activity_counter{freq="160.215",label="csx_road"}\t0\n'
-        'channel_activity_counter{freq="160.950",label="csx_yard"}\t0\n')
-    a = client.get("/v1/rail/activity", params={"lat": 42.26, "lon": -83.71}).json()
+    assert "location not configured" not in note and "No EOT/HOT receiver" not in note   # eot has a bias + radius
+    assert _states(a) == {"rail_voice": "unknown", "eot": "quiet"}            # csx_yard covers the point too
+    assert "csx_yard: no receiver has ever reported" in a["verdicts"]["rail_voice"]["reasons"]
+    # once it tunes both (a re-render restarts rtl_airband: a new run), the whole line was quiet
+    with db.begin() as c:
+        c.execute(text("DELETE FROM liveness WHERE component = 'receiver:rail-airband'"))
+    _listening(db, status, BOTH_TUNED, eot=False, ingest=False)
+    a = client.get("/v1/rail/activity", params=NEAR).json()
     assert {c["receiver_state"] for c in a["coverage"]["channels"]} == {"online"}
     assert "they were quiet" in a["coverage"]["note"] and "Not covered" not in a["coverage"]["note"]
+    v = a["verdicts"]["rail_voice"]
+    assert v["state"] == "quiet" and datetime.fromisoformat(v["listening_since"].replace("Z", "+00:00")) < \
+        datetime.fromisoformat(v["window_start"].replace("Z", "+00:00"))
     # the same heartbeat 10 minutes later: the receiver went offline
     old = time.time() - 600
     for p in status.iterdir():
@@ -263,22 +327,22 @@ def test_fresh_heartbeat_with_no_traffic_is_quiet(quiet):
     r2 = client.get("/v1/feeds/status").json()
     assert r2["coverage_summary"] == {"rail_radio": "receiver_offline", "eot": "receiver_offline",
                                       "public_safety": "not_configured"}
-    a2 = client.get("/v1/rail/activity", params={"lat": 42.26, "lon": -83.71}).json()
+    a2 = client.get("/v1/rail/activity", params=NEAR).json()
     assert a2["coverage"]["covered"] is True and "is offline (last heard" in a2["coverage"]["note"]
+    assert _states(a2) == {"rail_voice": "unknown", "eot": "unknown"}          # listened to for part of it
 
 
 def test_mixed_receivers_say_quiet_only_where_listening(mixed):
     """One channel online, one never reported, one offline, nothing heard: only the online one
     was quiet; the note counts the other two as not covered."""
     client, status, db = mixed
-    (status / "rail-airband.prom").write_text(                       # rtl_airband tunes csx_road only
-        'channel_activity_counter{freq="160.215",label="csx_road"}\t0\n')
+    _listening(db, status, ROAD_ONLY)                                # rtl_airband tunes csx_road only
     two_hours_ago = datetime.now(timezone.utc) - timedelta(hours=2)
     with db.begin() as c:                                            # csx_dispatch was last heard 2 h ago
         c.execute(text("""INSERT INTO transcript_chunks (chunk_id, feed_id, channel_id, "timestamp", captured_at,
-                          status, raw_transcript, source, source_key)
+                          status, raw_transcript, source, source_key, created_at)
                           VALUES (:cid, 'csx_dispatch', 'csx_dispatch', :t, :t, 'done', 'Q326 copy', 'sdr_files',
-                          'mixed-1')"""), {"cid": str(uuid.uuid4()), "t": two_hours_ago})
+                          'mixed-1', :t)"""), {"cid": str(uuid.uuid4()), "t": two_hours_ago})
     r = client.get("/v1/feeds/status").json()
     states = {f["feed_id"]: f["receiver"]["state"] for f in r["feeds"]}
     assert (states["csx_road"], states["csx_yard"], states["csx_dispatch"]) == ("online", "not_installed", "offline")
@@ -300,6 +364,7 @@ def test_mixed_receivers_say_quiet_only_where_listening(mixed):
             "line.") in note
     assert "CSX Test yard" not in note and "CSX Test dispatcher" not in note   # never called quiet
     assert note.count("quiet") == 2                                  # "was quiet" + "not a quiet line"
+    assert a["verdicts"]["rail_voice"]["state"] == "unknown"           # two covering channels aren't listened to
 
 
 def test_voice_notes_for_a_partly_tuned_line():
@@ -309,12 +374,16 @@ def test_voice_notes_for_a_partly_tuned_line():
     from core.config_files import Channel
     chans = [Channel(id=f"ch{i}", label=f"Ch {i}", kind="rail_voice") for i in range(11)]
     rstate = {c.id: {"state": "online" if i < 2 else "not_installed"} for i, c in enumerate(chans)}
-    assert _voice_notes(chans, rstate, heard=False) == [
+    # "online now" alone is never quiet
+    assert _voice_notes(chans, rstate, heard=False)[0] == (
+        "The rail voice receiver is online now, but Pulse can't vouch for 2 of 11 channels on this line across the "
+        "whole window (see `verdicts.rail_voice.reasons`): no transcripts here means no proof, not a quiet line.")
+    assert _voice_notes(chans, rstate, heard=False, proven={"ch0", "ch1"}) == [
         "The rail voice receiver is online for 2 of 11 channels on this line (Ch 0, Ch 1) and nothing was heard "
         "on them in the window: those channels were quiet.",
         "Not covered: 9 channels with no receiver (none has ever reported for them). No transcripts on those "
         "channels means no coverage, not a quiet line."]
-    assert _voice_notes(chans, rstate, heard=True) == [
+    assert _voice_notes(chans, rstate, heard=True, proven={"ch0", "ch1"}) == [
         "Not covered: 9 channels with no receiver (none has ever reported for them). No transcripts on those "
         "channels means no coverage, not a quiet line."]
     three = chans[:3]
@@ -345,17 +414,17 @@ def test_rail_hint_matches_other_dataset_names(quiet):
     assert "Pulse monitors" not in none["coverage"]["note"]
 
 
-BOTH_TUNED = ('channel_activity_counter{freq="160.215",label="csx_road"}\t0\n'
-              'channel_activity_counter{freq="160.950",label="csx_yard"}\t0\n')
-
-
-def _recording(c, channel: str, status: str, transcript: str | None, minutes_ago: float, key: str) -> str:
-    """One SDR recording in transcript_chunks, `minutes_ago` old, at transcription stage `status`."""
-    cid, t = str(uuid.uuid4()), datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+def _recording(c, channel: str, status: str, transcript: str | None, minutes_ago: float, key: str,
+               ingested_minutes_ago: float | None = None) -> str:
+    """One SDR recording in transcript_chunks, `minutes_ago` old, at transcription stage `status`,
+    ingested when it was captured unless `ingested_minutes_ago` says otherwise."""
+    now = datetime.now(timezone.utc)
+    cid, t = str(uuid.uuid4()), now - timedelta(minutes=minutes_ago)
+    created = t if ingested_minutes_ago is None else now - timedelta(minutes=ingested_minutes_ago)
     c.execute(text("""INSERT INTO transcript_chunks (chunk_id, feed_id, channel_id, "timestamp", captured_at, status,
-                      raw_transcript, source, source_key)
-                      VALUES (:cid, :ch, :ch, :t, :t, :st, :tx, 'sdr_files', :key)"""),
-              {"cid": cid, "ch": channel, "t": t, "st": status, "tx": transcript, "key": key})
+                      raw_transcript, source, source_key, created_at)
+                      VALUES (:cid, :ch, :ch, :t, :t, :st, :tx, 'sdr_files', :key, :created)"""),
+              {"cid": cid, "ch": channel, "t": t, "st": status, "tx": transcript, "key": key, "created": created})
     return cid
 
 
@@ -405,8 +474,13 @@ def test_recordings_not_transcribed_yet_are_not_quiet(quiet, db):
     note = a["coverage"]["note"]
     assert _not_quiet(note) and "1 recording whose transcription failed (error)" in note
     assert a["coverage"]["recordings_without_text"] == {"pending": 0, "error": 1, "no_speech": 0}
+    assert a["verdicts"]["rail_voice"]["state"] == "activity"
+    assert a["verdicts"]["rail_voice"]["counts"]["recordings_without_text"] == 1
+    # with 40 minutes of receiver and ingest history, a window that ends before them is quiet
+    _listening(db, status, BOTH_TUNED)
     a = client.get("/v1/rail/activity", params={**near, "since_minutes": 2}).json()
     assert "they were quiet" in a["coverage"]["note"] and "recordings_without_text" not in a["coverage"]
+    assert a["verdicts"]["rail_voice"]["state"] == "quiet"
 
 
 def test_voice_notes_count_untranscribed_recordings_as_traffic():
@@ -421,10 +495,11 @@ def test_voice_notes_count_untranscribed_recordings_as_traffic():
     assert _voice_notes(chans, online, heard=False, unread={"pending": 0, "error": 1, "no_speech": 0}) == [
         "Recorded on this line in the window but not in `transcripts`: 1 recording whose transcription failed "
         "(error). That is radio traffic, not a quiet line."]
-    assert _voice_notes(chans, online, heard=False, unread={"pending": 0, "error": 0, "no_speech": 0}) == [
+    assert _voice_notes(chans, online, heard=False, unread={"pending": 0, "error": 0, "no_speech": 0},
+                        proven={"ch0", "ch1", "ch2"}) == [
         "The rail voice receiver is online and nothing was heard on these channels in the window: they were quiet."]
     partly = {"ch0": {"state": "online"}, "ch1": {"state": "not_installed"}, "ch2": {"state": "not_installed"}}
-    assert _voice_notes(chans, partly, heard=False, unread={"pending": 2, "no_speech": 1}) == [
+    assert _voice_notes(chans, partly, heard=False, unread={"pending": 2, "no_speech": 1}, proven={"ch0"}) == [
         "Recorded on this line in the window but not in `transcripts`: 2 recordings not transcribed yet and 1 "
         "recording with no speech to transcribe. That is radio traffic, not a quiet line.",
         "Not covered: 2 channels with no receiver (none has ever reported for them). No transcripts on those "
@@ -487,10 +562,14 @@ def test_rail_hint_never_reaches_a_point_outside_the_line(db, cfg_dir, tmp_path,
         assert [c["channel"] for c in r["coverage"]["channels"]] == ["NS Far Sub road"], hint
         assert [t["text_untrusted"] for t in r["transcripts"]] == ["far line traffic"], hint
         assert r["coverage"]["covered"] is True and "Pulse monitors" not in r["coverage"].get("note", ""), hint
-    # substrings of its name or alias ("Far" alone is its name: "Sub" is ignored), or the wrong railroad
-    for hints in ({"subdivision": "Fa"}, {"subdivision": "arname"}, {"subdivision": "Far Sub", "railroad": "CSX"}):
+    # its own area covers the point with or without a hint: a substring hint names nothing (no
+    # note) and changes nothing; the wrong railroad leaves no channel
+    for hints in ({}, {"subdivision": "Fa"}, {"subdivision": "arname"}):
         r = client.get("/v1/rail/activity", params={**at_far, **hints}).json()
-        assert r["coverage"]["channels"] == [] and r["transcripts"] == [] and r["coverage"]["covered"] is False, hints
+        assert [c["channel"] for c in r["coverage"]["channels"]] == ["NS Far Sub road"], hints
+        assert "Pulse monitors" not in r["coverage"].get("note", ""), hints
+    r = client.get("/v1/rail/activity", params={**at_far, "subdivision": "Far Sub", "railroad": "CSX"}).json()
+    assert r["coverage"]["channels"] == [] and r["transcripts"] == [] and r["coverage"]["covered"] is False
 
 
 def test_feeds_status_with_shipped_config_reports_examples(db):

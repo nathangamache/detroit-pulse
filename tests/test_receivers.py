@@ -203,3 +203,61 @@ def test_coverage_object_from_config_and_derived(cfg_dir):
         "lines": [{"railroad": "CSX", "name": "Test Sub", "aliases": ["TESTNAME"]}]}           # from the rail plan
     fire = coverage_for(chans["fire"], subs, areas)
     assert "lines" not in fire and fire.get("area") and fire.get("radius_km")                 # from areas.yaml
+
+
+def test_a_label_on_another_frequency_is_not_this_channel(status_dir):
+    """rtl_airband's stats file still names the channel, but on another frequency than the one
+    configured (channels.local.yaml changed, rail.local.conf not re-rendered): the receiver is
+    not listening to it. A channel it doesn't label still matches by frequency."""
+    from core.receivers import pairs_cover, parse_airband_pairs, reported_freqs
+    stale = ('channel_activity_counter{freq="161.100",label="csx_a_road"}\t0\n'
+             'channel_activity_counter{freq="161.130",label="csx_a_disp"}\t0\n'
+             'channel_activity_counter{freq="160.500"}\t0\n')
+    _touch(status_dir / "rail-airband.prom", 5, stale)
+    rv = ReceiverView()
+    road = Channel(id="csx_a_road", label="road", kind="rail_voice", freq_mhz=160.215)
+    assert rv.status(road)["state"] == "not_installed"                  # used to be "online" by label alone
+    assert reported_freqs(rv.heartbeat("rail-airband").pairs, road) == [161.1]
+    assert rv.status(Channel(id="csx_a_road", label="road", kind="rail_voice", freq_mhz=161.1015))["state"] == "online"
+    assert rv.status(Channel(id="csx_a_road", label="road", kind="rail_voice"))["state"] == "online"   # no freq set
+    assert rv.status(Channel(id="new", label="n", kind="rail_voice", freq_mhz=160.5))["state"] == "online"
+    pairs = parse_airband_pairs(stale)
+    assert pairs == ((None, 160.5), ("csx_a_road", 161.1), ("csx_a_disp", 161.13))      # by frequency
+    # a detector on the road channel's frequency: the receiver hears it through the road channel
+    assert pairs_cover(pairs, Channel(id="det", label="d", kind="rail_detector", freq_mhz=161.1))
+    assert not pairs_cover(pairs, Channel(id="csx_a_disp", label="d", kind="rail_voice", freq_mhz=161.1))
+    assert reported_freqs(pairs, Channel(id="other", label="o", kind="rail_voice", freq_mhz=1.0)) == []
+
+
+def test_coverage_is_the_channels_own_area_first():
+    """A channel's own area (bias or area with a radius) decides and a subdivision never stretches
+    it; with only a radius it reaches that far from a subdivision it is on; an eot channel is
+    the same (no fixed 25 km), and a railroad hint keeps that railroad's channels."""
+    from core.config_files import Area
+    from core.receivers import channel_covers_point, on_railroad, own_places
+    sd = Subdivision(railroad="CSX", name="Test Sub", center=(42.25, -83.70), radius_km=8)
+    four_km = (42.25 + 0.036, -83.70)
+    short = Channel(id="s", label="s", kind="rail_road", railroad="CSX", subdivision="Test Sub",
+                    bias_lat=42.25, bias_lon=-83.70, coverage_radius_km=2)
+    assert own_places(short, []) == [(42.25, -83.70, 2)]
+    assert not channel_covers_point(short, *four_km, [sd], [])           # on the sub, but it hears 2 km
+    assert channel_covers_point(short, 42.255, -83.70, [sd], [])
+    capped = Channel(id="c", label="c", kind="rail_road", railroad="CSX", subdivision="Test Sub", coverage_radius_km=3)
+    assert own_places(capped, []) == [] and not channel_covers_point(capped, *four_km, [sd], [])
+    assert channel_covers_point(capped, 42.27, -83.70, [sd], [])
+    plain = Channel(id="p", label="p", kind="rail_road", railroad="CSX", subdivision="Test Sub")
+    assert channel_covers_point(plain, *four_km, [sd], []) and not channel_covers_point(plain, 42.35, -83.70, [sd], [])
+    eot = Channel(id="eot_hot", label="EOT", kind="eot", bias_lat=42.25, bias_lon=-83.70, coverage_radius_km=3)
+    assert channel_covers_point(eot, 42.27, -83.70, [sd], [])
+    assert not channel_covers_point(eot, 42.34, -83.70, [sd], [])      # 10 km
+    assert not channel_covers_point(eot, 42.43, -83.70, [sd], [])      # 20 km
+    assert not channel_covers_point(Channel(id="e2", label="e", kind="eot", bias_lat=42.25, bias_lon=-83.70),
+                                    42.25, -83.70, [sd], [])               # a bias with no radius reaches nothing
+    area = Area(id="a1", name="A", lat=42.25, lon=-83.70, radius_km=4)
+    in_area = Channel(id="ea", label="e", kind="eot", area_id="a1")
+    assert channel_covers_point(in_area, 42.27, -83.70, [], [area])
+    assert not channel_covers_point(in_area, *four_km, [], [area])
+    assert on_railroad(plain, "csx", [sd]) and not on_railroad(plain, "NS", [sd]) and on_railroad(plain, None, [])
+    linked = Channel(id="l", label="l", kind="rail_road")                   # linked only from the rail plan
+    sd.channels.append(config_files.RailChannel("CSX", "Test Sub", 160.2, None, "road", False, None, "l"))
+    assert on_railroad(linked, "CSX", [sd]) and not on_railroad(linked, "CN", [sd])

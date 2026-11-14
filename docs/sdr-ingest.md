@@ -13,6 +13,8 @@ RTL-SDR #2 ── traintap (EOT 457.9375 / HOT 452.9375 MHz) ──────�
                                                                               │
                      INGEST_SOURCES=sdr_files,traintap  (run_pipeline.py --stages ingest)
                      /v1/feeds/status reads data/receivers (RECEIVER_STATUS_DIR)
+                     the ingest stage records its own heartbeat and the receivers' in
+                     Postgres `liveness`, which /v1/rail/activity `verdicts` need (8)
 ```
 
 ## 1. Voice channels with rtl_airband
@@ -132,8 +134,10 @@ packet once in `rail_telemetry`, and interprets it with `rail/eot.py`:
 
 HOT command semantics are provisional in traintap, so HOT packets are flagged as
 emergencies only for message types listed in `rail.eot.HOT_EMERGENCY_MESSAGE_TYPES`
-(empty until real captures confirm the code). Set the eot channel's `bias:` point to
-the receiver location so `/v1/rail/activity` only shows telemetry near it.
+(empty until real captures confirm the code). Give the eot channel a `bias:` point at the
+receiver and a `coverage.radius_km` for what it really hears (or an `area_id`):
+`/v1/rail/activity` attributes its telemetry only to points inside that circle, and to no
+point at all without one ([pulse-api.md](pulse-api.md#rail_activity_near), item 2).
 
 ## 3. Rail channel plan
 
@@ -175,7 +179,9 @@ to the batch call, whose `rail.detector` fills the gaps (`parse_source = llm`).
   files, scan-mode frequencies, unmapped templates) and traintap CSVs.
 * `tests/test_receivers.py` covers heartbeats, receiver states, coverage and
   `coverage_summary` without a database; `tests/test_api.py` checks "no receiver" vs "quiet"
-  end to end.
+  end to end; `tests/test_verdicts.py` checks each rule of the `verdicts` proof (coverage
+  radius, listening for the whole window, frequency, ingest heartbeat, nothing heard), and
+  `tests/test_liveness.py` the heartbeat history itself.
 * `INGEST_SOURCES=fixture` replays `tests/fixtures/transmissions.jsonl` (synthetic text)
   through the whole pipeline: `uv run python run_pipeline.py --stages ingest,extract --sources fixture`.
 * To test audio end to end, drop any mp3/wav named like `rail_road_20261114_153012.mp3`
@@ -202,8 +208,11 @@ and `coverage_summary` ([pulse-api.md](pulse-api.md#feeds_status)). The files li
   feed in 7 days) means `not_installed`.
 * rtl_airband's stats file also lists the channels it demodulates
   (`channel_activity_counter{freq="160.215",label="<channel id>"}`; the renderer sets each
-  `label` to the Pulse channel id). A feed that isn't in the list, by label or by frequency
-  within 3 kHz, gets no heartbeat from it: re-render `rail.local.conf` after adding channels.
+  `label` to the Pulse channel id). A feed gets a heartbeat from it only when its label is
+  listed **with its configured `freq_mhz`** (within 3 kHz), or, when it isn't labelled, when
+  its frequency is listed. A label on another frequency means `rail.local.conf` is older than
+  `channels.local.yaml`: that feed is not being listened to. Re-render `rail.local.conf` after
+  adding or changing channels.
 * Without a heartbeat file (e.g. rtl_airband run by hand without `stats_filepath`), Pulse
   can only go by recordings: the feed is `online` for `RECEIVER_STALE_S` after each one and
   then `offline` even if the channel is merely quiet. Configure the heartbeat.
@@ -233,8 +242,41 @@ instead of "quiet". When the SDRs arrive:
    * `GET /v1/feeds/status` (through the gateway, or the `debug` profile):
      `receiver.state` is `online` for the rail and eot feeds and `coverage_summary` reads
      `{"rail_radio": "listening", "eot": "listening", ...}`, even before anyone transmits.
+   * `GET /v1/rail/activity` at a covered point: `verdicts.*.channels[].listening_since`
+     is set, and once that is older than the window (30 min by default) an empty point
+     reads `quiet` ([8](#8-heartbeat-history-and-the-ingest-heartbeat)).
 5. If a feed stays `not_installed` while others are `online`, it isn't in rtl_airband's
    channel list: re-render `rail.local.conf` and restart `rail-airband`. If everything
    stays `not_installed`, the stats file isn't being written: check `docker logs rail-airband`
    for "Cannot open output file /status/rail-airband.prom" and that the volume is
    `pulse:pulse-sdr 2775` ([godseye-integration.md](godseye-integration.md#sdr)).
+
+## 8. Heartbeat history and the ingest heartbeat
+
+A fresh heartbeat file proves a receiver is up *now*. To call a window quiet,
+`/v1/rail/activity` (`verdicts`, [pulse-api.md](pulse-api.md#rail_activity_near) item 8)
+must also show that the receiver listened for the **whole** window, and that the stage that
+turns its files and packets into rows did too. The ingest stage records both, in the
+`liveness` table (`core/liveness.py`):
+
+* After each completed poll, about every `INGEST_HEARTBEAT_S` (15 s), each source beats:
+  `ingest:sdr_files` and `ingest:traintap`. A source that can't see its input beats
+  `blind:no_watch_dir` (no `SDR_WATCH_DIR`) or `blind:no_csv` (no `TRAINTAP_CSV`): its silence
+  proves nothing. `sdr_files` also reports the recordings still being written (fresh
+  `.mp3.tmp` files, or files younger than `SDR_MIN_FILE_AGE_S`) per channel: a transmission in
+  progress is traffic, never quiet. A stale `.tmp` left behind by a crash is ignored.
+* With each beat it records its receivers' heartbeat files (`receiver:<name>`; `sdr_files`:
+  the receivers of every enabled voice channel, `traintap`: the eot channels'): the file's
+  mtime, and for rtl_airband the label/frequency pairs it lists.
+* Beats form runs (`up_since` .. `last_seen`). A beat extends the newest run when nothing
+  changed and it comes within `LIVENESS_MAX_GAP_S` (150 s) of the last one; a longer gap, a
+  receiver that stopped rewriting its file, a different channel list (a re-render restarts
+  rtl_airband) or a blind beat starts a new run. So a receiver or ingest stage that was down
+  during the window, or came back in it, is "listening only since" its new run began.
+  Runs older than `LIVENESS_KEEP_DAYS` (3) are deleted.
+
+The ingest stage runs in `pulse-transcribe`, which mounts `pulse_receivers` read-only at
+`/data/receivers` for this. After deploying a Pulse with this change (the image, the
+`liveness` migration and that mount), `quiet` becomes possible only once the history is as
+long as the window asked about; until then, and whenever pulse-transcribe is stopped, the
+answer is `unknown` with a reason, never `quiet`.

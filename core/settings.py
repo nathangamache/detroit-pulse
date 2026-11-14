@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     # <name>.heartbeat (traintap --heartbeat). Older than receiver_stale_s => the receiver is offline.
     receiver_status_dir: Path = REPO_DIR / "data" / "receivers"
     receiver_stale_s: float = 300.0
+    # Liveness history (core/liveness.py), for /v1/rail/activity `verdicts`: the ingest stage beats
+    # every ingest_heartbeat_s and records its receivers' heartbeats; a gap longer than
+    # liveness_max_gap_s between two beats ends a run (nothing proves it kept listening).
+    ingest_heartbeat_s: float = 15.0
+    liveness_max_gap_s: float = 150.0
+    liveness_keep_days: float = 3.0
     broadcastify_legacy_enabled: bool = False   # see ingest/sources/broadcastify_legacy.py (ToS)
     broadcastify_tos_acknowledged: bool = False
 

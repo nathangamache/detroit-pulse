@@ -7,7 +7,9 @@ silent, into RECEIVER_STATUS_DIR (the `pulse_receivers` volume in deploy/docker-
   <name>.prom       rtl_airband's stats file (global `stats_filepath` in deploy/sdr/rail.conf),
                     rewritten every 15 s while the dongle delivers samples. It names every channel
                     rtl_airband demodulates (label = Pulse channel id, freq in MHz), so a channel
-                    that isn't in it gets no heartbeat from that receiver.
+                    that isn't in it gets no heartbeat from that receiver. A channel whose label
+                    is in it with another frequency than its configured `freq_mhz` (the config
+                    changed and rail.local.conf wasn't re-rendered) gets none either.
   <name>.heartbeat  any file the receiver touches periodically: traintap's `--heartbeat`
                     (about once a minute while its decode loop runs).
 
@@ -19,7 +21,9 @@ A feed's receiver (`receiver:` in channels(.local).yaml, else by kind: rail voic
   not_installed  never reported: no heartbeat file, and no SDR recording / EOT packet for the
                  feed in the last 7 days
   offline        the newest of those is older than RECEIVER_STALE_S (default 300 s)
-  online         newer than that. With no transcripts, the channel was QUIET, not uncovered.
+  online         newer than that. That is "listening now", not "quiet": /v1/rail/activity only
+                 calls a window quiet when core/liveness.py's history shows the receiver (and the
+                 ingest stage) listening across all of it (api/rail_verdicts.py).
 
 Only real receiver output counts as evidence: recordings ingested by `sdr_files` and traintap
 packets; fixture replays and legacy imports don't.
@@ -38,10 +42,14 @@ from core.settings import Settings, get_settings
 
 RECEIVER_STATES = ("not_installed", "offline", "online")
 SUMMARY_GROUPS = ("rail_radio", "eot", "public_safety")
+FREQ_TOLERANCE_MHZ = 0.003          # a stats line's frequency matches a channel's within 3 kHz
 
 # rtl_airband stats lines: channel_activity_counter{freq="160.215",label="csx_road"}\t123
 _METRIC = re.compile(r'^channel_\w+\{freq="([0-9.]+)"(?:,label="([^"]*)")?\}', re.M)
 _MAX_STATS_BYTES = 1 << 20
+
+# (label or None, frequency in MHz) for each channel a receiver says it demodulates
+Pairs = tuple[tuple[str | None, float], ...]
 
 
 def _utc(t: datetime | None) -> datetime | None:
@@ -55,32 +63,70 @@ def iso(t: datetime | None) -> str | None:
     return None if t is None else t.isoformat().replace("+00:00", "Z")
 
 
+def _freq_ok(f: float, want: float) -> bool:
+    return abs(f - want) < FREQ_TOLERANCE_MHZ
+
+
+def pairs_cover(pairs: Pairs, ch: Channel) -> bool:
+    """Does a receiver that says it demodulates `pairs` listen to `ch`? Its label (the Pulse
+    channel id) must come with the channel's configured frequency: a label match on another
+    frequency means the receiver's config is stale, so it is NOT listening to this channel. A
+    channel the receiver doesn't label is matched by frequency (an unlabelled channel, or one
+    that shares another channel's frequency, like a detector on the road channel)."""
+    mine = [f for label, f in pairs if label == ch.id]
+    if mine:
+        return ch.freq_mhz is None or any(_freq_ok(f, ch.freq_mhz) for f in mine)
+    return ch.freq_mhz is not None and any(_freq_ok(f, ch.freq_mhz) for _, f in pairs)
+
+
+def reported_freqs(pairs: Pairs, ch: Channel) -> list[float]:
+    """The frequencies a receiver reports under `ch`'s label when none is the configured one
+    (empty when they agree, or when the receiver doesn't label the channel)."""
+    mine = sorted({f for label, f in pairs if label == ch.id})
+    if not mine or ch.freq_mhz is None or any(_freq_ok(f, ch.freq_mhz) for f in mine):
+        return []
+    return mine
+
+
 @dataclass(frozen=True)
 class Heartbeat:
     receiver: str
     path: Path
     at: datetime                              # file mtime, UTC
-    labels: frozenset[str] = frozenset()      # rtl_airband channel labels (Pulse channel ids)
-    freqs: tuple[float, ...] = ()             # rtl_airband channel frequencies, MHz
+    pairs: Pairs = ()                         # rtl_airband (label, freq MHz) per demodulated channel
+
+    @property
+    def labels(self) -> frozenset[str]:
+        return frozenset(label for label, _ in self.pairs if label)
+
+    @property
+    def freqs(self) -> tuple[float, ...]:
+        return tuple(sorted({f for _, f in self.pairs}))
+
+    @property
+    def is_stats(self) -> bool:
+        return self.path.suffix == ".prom"
 
     def covers(self, ch: Channel) -> bool:
         """Does this heartbeat speak for `ch`? A plain heartbeat (or a stats file we couldn't
-        parse, e.g. read mid-rewrite) covers every channel of its receiver."""
-        if not self.freqs:
+        parse, e.g. read mid-rewrite) covers every channel of its receiver; a stats file
+        covers the channels it lists with their configured frequency (pairs_cover)."""
+        if not self.pairs:
             return True
-        if ch.id in self.labels:
-            return True
-        return ch.freq_mhz is not None and any(abs(f - ch.freq_mhz) < 0.003 for f in self.freqs)
+        return pairs_cover(self.pairs, ch)
+
+
+def parse_airband_pairs(text: str) -> Pairs:
+    """(label or None, freq MHz) for every channel line in an rtl_airband stats file."""
+    out: set[tuple[str | None, float]] = set()
+    for m in _METRIC.finditer(text):
+        out.add((m[2] or None, round(float(m[1]), 4)))
+    return tuple(sorted(out, key=lambda p: (p[1], p[0] or "")))
 
 
 def parse_airband_stats(text: str) -> tuple[frozenset[str], tuple[float, ...]]:
-    labels: set[str] = set()
-    freqs: set[float] = set()
-    for m in _METRIC.finditer(text):
-        freqs.add(round(float(m[1]), 4))
-        if m[2]:
-            labels.add(m[2])
-    return frozenset(labels), tuple(sorted(freqs))
+    pairs = parse_airband_pairs(text)
+    return frozenset(label for label, _ in pairs if label), tuple(sorted({f for _, f in pairs}))
 
 
 def heartbeat_paths(name: str, s: Settings) -> list[Path]:
@@ -109,10 +155,10 @@ def read_heartbeat(name: str, s: Settings | None = None) -> Heartbeat | None:
         return Heartbeat(name, path, at)
     try:
         with open(path, "rb") as f:
-            labels, freqs = parse_airband_stats(f.read(_MAX_STATS_BYTES).decode("utf-8", "replace"))
+            pairs = parse_airband_pairs(f.read(_MAX_STATS_BYTES).decode("utf-8", "replace"))
     except OSError:
-        labels, freqs = frozenset(), ()
-    return Heartbeat(name, path, at, labels, freqs)
+        pairs = ()
+    return Heartbeat(name, path, at, pairs)
 
 
 def state_from(last_seen: datetime | None, now: datetime, stale_s: float) -> str:
@@ -183,20 +229,54 @@ def channel_matches_hint(ch: Channel, hint: str, railroad: str | None = None) ->
                for line_rr, names in lines)
 
 
-def channel_covers_point(ch: Channel, lat: float, lon: float, subs: list[Subdivision], areas: list[Area]) -> bool:
-    """Does `ch`'s receiver reach (lat, lon)? Only a place on record counts: the channel's
-    `bias` point with a `coverage.radius_km`, its `area_id` area (radius: `coverage.radius_km`,
-    else the area's), or a subdivision it is on whose center+radius / bbox contains the point.
-    A channel with none of these covers no point: a hint naming its line is not enough."""
+def own_places(ch: Channel, areas: list[Area]) -> list[tuple[float, float, float]]:
+    """The channel's own receiver area(s) on record, as (lat, lon, radius_km): its `bias` point
+    and/or its `area_id` area's center, with `coverage.radius_km` (else the area's radius).
+    Empty when it has no radius or no center: a radius alone places nothing."""
     area = next((a for a in areas if a.id == ch.area_id), None) if ch.area_id else None
     radius = ch.coverage_radius_km if ch.coverage_radius_km is not None else (area.radius_km if area else None)
-    if radius is not None:
-        if ch.bias_lat is not None and ch.bias_lon is not None and \
-                haversine_km(ch.bias_lat, ch.bias_lon, lat, lon) <= radius:
+    if radius is None:
+        return []
+    out = []
+    if ch.bias_lat is not None and ch.bias_lon is not None:
+        out.append((ch.bias_lat, ch.bias_lon, radius))
+    if area is not None:
+        out.append((area.lat, area.lon, radius))
+    return out
+
+
+def channel_covers_point(ch: Channel, lat: float, lon: float, subs: list[Subdivision], areas: list[Area]) -> bool:
+    """Does `ch`'s receiver reach (lat, lon)? Only a place on record counts, never a name and
+    never a fixed distance:
+
+    1. the channel's own area (own_places: `bias` or `area_id`, with `coverage.radius_km` or
+       the area's radius) decides when it has one; a subdivision never stretches it;
+    2. otherwise a subdivision it is on (on_subdivision) whose center+radius / bbox contains the
+       point, and no farther from that subdivision's center than the channel's own
+       `coverage.radius_km` when it gives one.
+
+    A channel with none of these covers no point: a hint naming its line is not enough."""
+    places = own_places(ch, areas)
+    if places:
+        return any(haversine_km(plat, plon, lat, lon) <= r for plat, plon, r in places)
+    r = ch.coverage_radius_km
+    for sd in subs:
+        if not (sd.near(lat, lon) and on_subdivision(ch, sd)):
+            continue
+        if r is None or sd.center is None or haversine_km(sd.center[0], sd.center[1], lat, lon) <= r:
             return True
-        if area is not None and haversine_km(area.lat, area.lon, lat, lon) <= radius:
-            return True
-    return any(sd.near(lat, lon) and on_subdivision(ch, sd) for sd in subs)
+    return False
+
+
+def on_railroad(ch: Channel, railroad: str | None, subs: list[Subdivision]) -> bool:
+    """Is `ch` one of `railroad`'s channels (its own railroad, a line it hears, or a line in the
+    rail plan it is on)? Always true without a railroad hint."""
+    rr = (railroad or "").strip().upper()
+    if not rr:
+        return True
+    if (ch.railroad or "").upper() == rr or any((ln.railroad or "").upper() == rr for ln in ch.coverage_lines or []):
+        return True
+    return any(sd.railroad.upper() == rr and on_subdivision(ch, sd) for sd in subs)
 
 
 def lines_for(ch: Channel, subs: list[Subdivision]) -> list[RailLine]:

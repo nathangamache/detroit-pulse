@@ -28,7 +28,7 @@ target_metadata = Base.metadata
 # PostGIS / tiger tables live in the same DB; never let autogenerate touch them
 # (the 2026-03 autogenerate migration tried to DROP spatial_ref_sys and the tiger schema).
 _OURS = {"incidents", "transcript_chunks", "rail_telemetry", "rail_detector_events", "llm_usage",
-         "geocode_cache", "pipeline_events", "shadow_log", "pipeline_metrics", "lora_model_registry"}
+         "geocode_cache", "pipeline_events", "liveness", "shadow_log", "pipeline_metrics", "lora_model_registry"}
 
 
 def include_object(obj, name, type_, reflected, compare_to):
