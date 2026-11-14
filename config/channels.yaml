@@ -1,0 +1,59 @@
+# SDR channel metadata: GENERIC EXAMPLE. Real channels go in config/channels.local.yaml
+# (gitignored), which replaces this file when present.
+#
+# Do NOT put RadioReference-derived frequencies or talkgroups in any committed file
+# (RadioReference's terms forbid AI/ML use of their data). Build the rail plan from
+# FCC ULS public data (scripts/import_fcc_uls.py) or from your own monitoring.
+#
+# How SDR files map to a channel (ingest/sources/sdr_files.py):
+#   templates   rtl_airband `filename_template` values for this channel (one per output)
+#   talkgroups  trunk-recorder talkgroup ids (P25 systems rtl_airband can't decode)
+#   freq_mhz    fallback match when rtl_airband `include_freq = true` (scan mode)
+#
+# kind: police | fire | ems | public_safety | rail_road | rail_dispatcher | rail_yard |
+#       rail_detector | eot | other
+# unit_prefix  namespaces unit IDs across agencies in correlation (e.g. "AAFD:Engine 5")
+# bias         geocoder bias point; else the area's center, else areas.default_bias
+# vocab        extra whisper hints for this channel (public street/place names)
+
+channels:
+  - id: example_fire_dispatch
+    label: Example city fire dispatch (analog NFM)
+    kind: fire
+    templates: [fire_dispatch]
+    freq_mhz: null            # set locally
+    agency: Example Fire Department
+    unit_prefix: EXFD
+    county: Washtenaw
+    city: Ann Arbor
+    area_id: ann_arbor
+    enabled: true
+    priority: 1
+
+  - id: example_rail_road
+    label: Example railroad road channel
+    kind: rail_road
+    templates: [rail_road]
+    freq_mhz: null            # AAR channel in the 160-161.6 MHz railroad pool; set locally
+    railroad: EXAMPLE_RR
+    subdivision: Example Subdivision
+    county: Wayne
+    enabled: true
+    priority: 2
+
+  - id: example_rail_detector
+    label: Example railroad defect detector (shares the road channel on most lines)
+    kind: rail_detector
+    templates: [rail_detector]
+    freq_mhz: null
+    railroad: EXAMPLE_RR
+    subdivision: Example Subdivision
+    enabled: false
+
+  # traintap telemetry (not audio). AAR S-9152 standard frequencies, public:
+  # EOT 457.9375 MHz (rear -> loco), HOT 452.9375 MHz (loco -> rear), DPU 457.9250 MHz.
+  - id: eot_hot
+    label: EOT/HOT telemetry (traintap)
+    kind: eot
+    freq_mhz: 457.9375
+    enabled: true

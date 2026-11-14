@@ -41,12 +41,12 @@ def enqueue_transmission(*, source: str, source_key: str, channel_id: str,
                 (chunk_id, feed_id, channel_id, "timestamp", captured_at, source, source_key,
                  audio_path, raw_transcript, freq_hz, duration_s, status,
                  transcribed_at)
-            VALUES (:cid, :ch, :ch, :ts, :ts, :src, :key, :audio, :tx, :freq, :dur, :st,
-                    CASE WHEN :st = 'transcribed' THEN now() END)
+            VALUES (:cid, :ch, :ch, :ts, :ts, :src, :key, :audio, :tx, :freq, :dur, :st, :tat)
             ON CONFLICT (source_key) DO NOTHING
             RETURNING chunk_id"""), {
             "cid": cid, "ch": channel_id, "ts": captured_at, "src": source, "key": source_key,
             "audio": audio_path, "tx": transcript, "freq": freq_hz, "dur": duration_s, "st": status,
+            "tat": datetime.now(timezone.utc) if status == ST_TRANSCRIBED else None,
         }).first()
     return str(row[0]) if row else None
 

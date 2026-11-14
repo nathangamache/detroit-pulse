@@ -174,6 +174,9 @@ class Channel:
 
 def _channel_from(d: dict) -> Channel:
     tmpl = d.get("templates") or ([d["template"]] if d.get("template") else [])
+    if any(isinstance(t, bool) for t in tmpl):
+        # YAML 1.1 turns bare on/off/yes/no into booleans; template names must be quoted
+        raise ValueError(f"channel {d.get('id')}: quote template names like on/off/yes/no")
     bias = d.get("bias") or {}
     return Channel(
         id=str(d["id"]), label=str(d.get("label", d["id"])), kind=str(d.get("kind", "public_safety")),

@@ -25,9 +25,13 @@ PROMPT_CHAR_BUDGET = 700
 CONTEXT_CHAR_BUDGET = 160
 
 
-@lru_cache(maxsize=8)
 def _profile_terms(profile: str) -> tuple[str, ...]:
-    path = Path(get_settings().config_dir) / "vocab" / f"{profile}.txt"
+    return _terms_from(str(Path(get_settings().config_dir) / "vocab" / f"{profile}.txt"))
+
+
+@lru_cache(maxsize=16)
+def _terms_from(path_str: str) -> tuple[str, ...]:
+    path = Path(path_str)
     if not path.exists():
         return ()
     terms: list[str] = []
