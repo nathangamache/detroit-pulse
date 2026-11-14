@@ -1,0 +1,21 @@
+# Verification override: no SDR, no Claude, no network geocoders, fixture transmissions only.
+#
+#   PULSE_SECRETS_DIR=/tmp/pulse-verify-secrets PULSE_PGDATA_VOLUME=pulse_verify_pgdata \
+#   PULSE_REDISDATA_VOLUME=pulse_verify_redisdata ./setup.sh          # dummy secrets, fresh volumes
+#   docker-compose -p pulse -f docker-compose.yml -f docker-compose.verify.yml up -d
+#
+# pulse-extract replays tests/fixtures/transmissions.jsonl (synthetic text) through ingest ->
+# rules-only extraction -> local geocoder -> correlation; pulse-transcribe loads tiny.en.
+version: "2.4"
+services:
+  pulse-extract:
+    command: [nice, -n, "19", python, run_pipeline.py, --stages, "ingest,extract,resolver", --sources, fixture]
+    environment:
+      LLM_ENABLED: "false"
+      GEOCODER_PROVIDERS: local
+    volumes:
+      - ../tests/fixtures:/fixtures:ro
+  pulse-transcribe:
+    environment:
+      WHISPER_MODEL: tiny.en
+      INGEST_SOURCES: sdr_files

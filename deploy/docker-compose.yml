@@ -1,0 +1,329 @@
+# Detroit Pulse as a hardened container stack for the godseye gateway.
+#
+#   pulse-postgis     PostGIS 16 (existing data volume), internal network only
+#   pulse-redis       Redis 7 (existing data volume), internal network only
+#   pulse-api         FastAPI :7710 on pulse_internal + godseye_backend (the gateway's PULSE_URL
+#                     http://pulse-api:7710); runs migrations first. Nothing is published.
+#   pulse-transcribe  ingest + faster-whisper (8 threads, nice 19)
+#   pulse-extract     extraction (Claude batch, or rules-only without a key) + resolver + local geocoder
+#   profiles:
+#     frontend        pulse-frontend: one-shot copy of the built UI into the pulse_frontend volume
+#     debug           pulse-debug: 127.0.0.1-only ports 7710/5436/6381 (TCP forwarder)
+#     sdr             rail-airband + traintap-eot on two RTL-SDR Blog V3s (serials RAIL160, EOT457)
+#
+#   cd deploy
+#   ./setup.sh                                   # network, volumes, mode-600 secrets (once)
+#   docker-compose -p pulse build
+#   docker-compose -p pulse up -d                # core stack
+#   docker-compose -p pulse --profile frontend up -d pulse-frontend
+#   docker-compose -p pulse --profile debug up -d pulse-debug
+#   docker-compose -p pulse stop                 # named volumes are kept
+#
+# Works with Compose v2 (`docker compose`) and docker-compose 1.29 (use `up -d`; 1.29's attached
+# `up` crashes against Docker 29). The repo-root docker-compose.yml (dev: DBs on 127.0.0.1) uses
+# the same container names and data volumes, so only one of the two can run at a time.
+# Secrets: deploy/secrets/*.env, mode 600 (setup.sh). No docker socket, no home directory mounts:
+# only the repo's config/ and the geocoder index directory are bind-mounted, read-only.
+version: "2.4"
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+# Non-secret settings shared by the Pulse containers (secrets come from the env files).
+x-pulse-env: &pulse-env
+  POSTGRES_HOST: pulse-postgis
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: pulse
+  POSTGRES_DB: detroitpulse
+  REDIS_HOST: pulse-redis
+  REDIS_PORT: "6379"
+  CONFIG_DIR: /app/config
+  LLM_FEWSHOT_FILE: /app/config/fewshots.local.jsonl
+  GEOCODER_LOCAL_INDEX: /geocoder/index
+  SDR_WATCH_DIR: /data/sdr
+  TRAINTAP_CSV: /data/traintap/trains.csv
+  FIXTURE_DIR: /fixtures
+  LOG_JSON: "true"
+  HOME: /tmp
+
+services:
+  pulse-postgis:
+    <<: *hardening
+    image: postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5
+    container_name: pulse-postgis
+    # the data directory is owned by postgres (999); running as 999 skips the root entrypoint
+    # path (chown/gosu), so no capabilities are needed
+    user: "999:999"
+    env_file: ["${PULSE_SECRETS_DIR:-./secrets}/postgres.env"]      # POSTGRES_PASSWORD
+    environment:
+      POSTGRES_USER: pulse
+      POSTGRES_DB: detroitpulse
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    command: [postgres, -c, max_connections=60, -c, shared_buffers=512MB, -c, work_mem=16MB,
+              -c, password_encryption=scram-sha-256]
+    volumes:
+      - pulse_pgdata:/var/lib/postgresql/data
+    tmpfs:
+      - /var/run/postgresql:size=1m,mode=2775,uid=999,gid=999
+      - /tmp:size=64m,mode=1777
+    shm_size: 256m
+    mem_limit: 4g
+    memswap_limit: 4g
+    pids_limit: 256
+    cpus: 4.0
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -U pulse -d detroitpulse"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [pulse_internal]
+
+  pulse-redis:
+    <<: *hardening
+    image: redis:7-alpine@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065
+    container_name: pulse-redis
+    user: "999:1000"
+    env_file: ["${PULSE_SECRETS_DIR:-./secrets}/redis.env"]         # REDIS_PASSWORD
+    # requirepass goes to a tmpfs config file so it never appears in argv.
+    # FLUSHALL/FLUSHDB/CONFIG/DEBUG are disabled: nothing in Pulse needs them.
+    command:
+      - sh
+      - -c
+      - >-
+        printf 'requirepass %s\nappendonly yes\nprotected-mode yes\nmaxmemory 512mb\nmaxmemory-policy noeviction\nrename-command FLUSHALL ""\nrename-command FLUSHDB ""\nrename-command CONFIG ""\nrename-command DEBUG ""\n' "$$REDIS_PASSWORD" > /tmp/redis.conf
+        && exec redis-server /tmp/redis.conf
+    volumes:
+      - pulse_redisdata:/data
+    tmpfs:
+      - /tmp:size=1m,mode=0700,uid=999,gid=1000
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 64
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [pulse_internal]
+
+  pulse-api:
+    <<: *hardening
+    image: detroit-pulse:0.2.0
+    build: { context: .., dockerfile: deploy/docker/Dockerfile }
+    container_name: pulse-api
+    user: "10010:10010"
+    command: ["sh", "-c", "alembic upgrade head && exec python -m api --allow-non-loopback"]
+    depends_on:
+      pulse-postgis: { condition: service_healthy }
+      pulse-redis: { condition: service_healthy }
+    env_file:
+      - "${PULSE_SECRETS_DIR:-./secrets}/postgres.env"
+      - "${PULSE_SECRETS_DIR:-./secrets}/redis.env"
+      - "${PULSE_SECRETS_DIR:-./secrets}/api.env"                   # PULSE_API_TOKEN (+ PULSE_ADMIN_TOKEN)
+    environment:
+      <<: *pulse-env
+      PULSE_API_HOST: 0.0.0.0           # inside the container; nothing is published on the host
+      PULSE_API_PORT: "7710"
+    volumes:
+      - "${PULSE_CONFIG_DIR:-../config}:/app/config:ro"
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 128
+    cpus: 1.0
+    networks:
+      pulse_internal: {}
+      godseye_backend:
+        aliases: [pulse-api]
+
+  pulse-transcribe:
+    <<: *hardening
+    image: detroit-pulse:0.2.0
+    container_name: pulse-transcribe
+    user: "10010:10010"
+    group_add: ["10030"]                 # pulse-sdr: shared with rail-airband / traintap-eot
+    command: [nice, -n, "19", python, run_pipeline.py, --stages, "ingest,transcribe"]
+    depends_on:
+      pulse-api: { condition: service_healthy }      # migrations done
+    env_file:
+      - "${PULSE_SECRETS_DIR:-./secrets}/postgres.env"
+      - "${PULSE_SECRETS_DIR:-./secrets}/redis.env"
+    environment:
+      <<: *pulse-env
+      INGEST_SOURCES: "${PULSE_INGEST_SOURCES:-sdr_files,traintap}"
+      WHISPER_MODEL: "${WHISPER_MODEL:-small.en}"
+      WHISPER_CPU_THREADS: "8"
+      OMP_NUM_THREADS: "8"
+      WHISPER_DOWNLOAD_ROOT: /models
+    volumes:
+      - pulse_sdr:/data/sdr
+      - pulse_traintap:/data/traintap:ro
+      - pulse_models:/models
+      - "${PULSE_CONFIG_DIR:-../config}:/app/config:ro"
+    tmpfs: ["/tmp:size=256m,mode=1777"]
+    healthcheck: { disable: true }
+    mem_limit: 4g
+    memswap_limit: 4g
+    pids_limit: 256
+    cpus: 8.0
+    # pulse_egress only for the first Whisper model download (huggingface.co) into pulse_models
+    networks: [pulse_internal, pulse_egress]
+
+  pulse-extract:
+    <<: *hardening
+    image: detroit-pulse:0.2.0
+    container_name: pulse-extract
+    user: "10010:10010"
+    command: [nice, -n, "19", python, run_pipeline.py, --stages, "${PULSE_EXTRACT_STAGES:-extract,resolver}"]
+    depends_on:
+      pulse-api: { condition: service_healthy }
+    env_file:
+      - "${PULSE_SECRETS_DIR:-./secrets}/postgres.env"
+      - "${PULSE_SECRETS_DIR:-./secrets}/redis.env"
+      - "${PULSE_SECRETS_DIR:-./secrets}/anthropic.env"             # ANTHROPIC_API_KEY (empty => rules-only)
+    environment:
+      <<: *pulse-env
+      LLM_ENABLED: "${PULSE_LLM_ENABLED:-true}"
+      GEOCODER_PROVIDERS: "${GEOCODER_PROVIDERS:-local,census,photon}"
+      INGEST_SOURCES: "${PULSE_EXTRACT_INGEST_SOURCES:-fixture}"     # only used if stages include ingest
+    volumes:
+      - "${PULSE_GEOCODER_INDEX:-~/.local/share/detroit-pulse/geocoder/index}:/geocoder/index:ro"
+      - "${PULSE_CONFIG_DIR:-../config}:/app/config:ro"
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    healthcheck: { disable: true }
+    mem_limit: 2g                        # ~560 MB geocoder index + worker
+    memswap_limit: 2g
+    pids_limit: 128
+    cpus: 2.0
+    # pulse_egress: Anthropic API, Census/Photon geocoder fallbacks
+    networks: [pulse_internal, pulse_egress]
+
+  # ── optional ──────────────────────────────────────────────────────────────
+  pulse-frontend:
+    <<: *hardening
+    profiles: [frontend]
+    image: detroit-pulse-ui:0.2.0
+    build: { context: .., dockerfile: deploy/docker/frontend.Dockerfile }
+    container_name: pulse-frontend
+    user: "10010:10010"
+    restart: "no"
+    volumes:
+      - pulse_frontend:/out
+    network_mode: none
+    mem_limit: 128m
+    pids_limit: 32
+    cpus: 0.5
+
+  pulse-debug:
+    <<: *hardening
+    profiles: [debug]
+    image: detroit-pulse:0.2.0
+    container_name: pulse-debug
+    user: "10010:10010"
+    command: [python, deploy/docker/tcp_forward.py, "7710:pulse-api:7710", "5432:pulse-postgis:5432",
+              "6379:pulse-redis:6379"]
+    ports:
+      - "127.0.0.1:${PULSE_DEBUG_API_PORT:-7710}:7710"
+      - "127.0.0.1:${PULSE_DEBUG_PG_PORT:-5436}:5432"
+      - "127.0.0.1:${PULSE_DEBUG_REDIS_PORT:-6381}:6379"
+    healthcheck: { disable: true }
+    mem_limit: 64m
+    pids_limit: 32
+    cpus: 0.5
+    networks: [pulse_internal, pulse_debug]
+
+  # ── SDR receivers (profile sdr; no hardware attached yet) ─────────────────
+  # Host prerequisites (docs/godseye-integration.md#sdr): udev rule giving plugdev (gid 46) access to
+  # 0bda:2838, DVB driver blacklisted, dongle serials set with rtl_eeprom (RAIL160, EOT457).
+  rail-airband:
+    <<: *hardening
+    profiles: [sdr]
+    image: ghcr.io/rtl-airband/rtlsdr-airband:v7.0.1@sha256:e6da94e62ea7ccbdc5beb0031717c7dd41dfbb383be3674abc7333560d0a5c80
+    container_name: rail-airband
+    init: false                          # the image's entrypoint is already tini
+    user: "10020:10030"                  # group pulse-sdr: Pulse reads (and may delete) the files
+    group_add: ["${SDR_USB_GID:-46}"]    # plugdev on the host owns /dev/bus/usb/* via udev
+    entrypoint: ["/sbin/tini", "--", "/bin/sh", "-c",
+                 "umask 0002 && exec /app/rtl_airband -F -e -c /app/rtl_airband.conf"]
+    device_cgroup_rules: ["c 189:* rmw"]
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb:ro
+      - "${PULSE_RAIL_CONF:-./sdr/rail.local.conf}:/app/rtl_airband.conf:ro"
+      - pulse_sdr:/recordings
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    depends_on: [pulse-transcribe]       # so the shared volume gets Pulse's owner/mode first
+    network_mode: none
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    cpus: 1.5
+
+  traintap-eot:
+    <<: *hardening
+    profiles: [sdr]
+    image: ghcr.io/trickv/traintap:sha-984af85@sha256:fbfb60d996c95deb620ca0e6f2c7f161d417ca457f64cf48fe550cd8b6f971db
+    container_name: traintap-eot
+    user: "10021:10030"
+    group_add: ["${SDR_USB_GID:-46}"]
+    # traintap selects dongles by index only; the wrapper resolves the serial to an index first
+    entrypoint: [python, /opt/pulse/traintap_by_serial.py, "${EOT_SERIAL:-EOT457}", --]
+    command: [--mode, eot, --csv, /data/trains.csv, --passes-csv, /data/passes.csv,
+              --signal-csv, /data/signal.csv]
+    environment:
+      HOME: /tmp
+    device_cgroup_rules: ["c 189:* rmw"]
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb:ro
+      - ./sdr/traintap_by_serial.py:/opt/pulse/traintap_by_serial.py:ro
+      - pulse_traintap:/data
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    depends_on: [pulse-transcribe]
+    network_mode: none
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 64
+    cpus: 1.5
+
+volumes:
+  # the dev stack's data (repo-root docker-compose.yml, project "detroit-pulse"), reused in place
+  pulse_pgdata:
+    external: true
+    name: "${PULSE_PGDATA_VOLUME:-detroit-pulse_pulse_pgdata}"
+  pulse_redisdata:
+    external: true
+    name: "${PULSE_REDISDATA_VOLUME:-detroit-pulse_pulse_redisdata}"
+  # shared with the gateway (mounted read-only there as PULSE_STATIC_DIR)
+  pulse_frontend:
+    external: true
+    name: "${PULSE_FRONTEND_VOLUME:-pulse_frontend}"
+  pulse_sdr:
+    name: pulse_sdr
+  pulse_traintap:
+    name: pulse_traintap
+  pulse_models:
+    name: pulse_models
+
+networks:
+  pulse_internal:
+    name: pulse_internal
+    driver: bridge
+    internal: true
+  pulse_egress:
+    name: pulse_egress
+    driver: bridge
+  pulse_debug:
+    name: pulse_debug
+    driver: bridge
+  # created by setup.sh; the gateway's compose joins it too (docs/godseye-integration.md)
+  godseye_backend:
+    external: true
+    name: godseye_backend

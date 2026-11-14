@@ -6,6 +6,8 @@
 #
 # Both services publish ONLY on 127.0.0.1 and use ports that don't collide with
 # the other stacks already running on the box.
+# The full container stack (deploy/docker-compose.yml) reuses these data volumes and
+# container names, so run one or the other (docs/godseye-integration.md).
 # Passwords come from .env (never committed); compose refuses to start without them.
 x-hardening: &hardening
   restart: unless-stopped

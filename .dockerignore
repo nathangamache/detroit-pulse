@@ -1,0 +1,31 @@
+# Build context = the repo root (deploy/docker/Dockerfile). Keep personal config, secrets,
+# data, audio and caches out of every image layer.
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+config/*.local.*
+deploy/secrets
+deploy/sdr/*.local.conf
+data
+logs
+.pids
+lora
+tests
+*.mp3
+*.wav
+*.m4a
+*.cf32
+*.dump
+*.sql
+!db/schema.sql
+frontend/node_modules
+frontend/dist
+frontend/.env*

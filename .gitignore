@@ -107,3 +107,8 @@ data/
 *.cf32
 frontend/.env*
 !frontend/.env.example
+# ── Container deploy (never commit) ──────────────────────────────────────────
+deploy/secrets/*
+!deploy/secrets/README.md
+deploy/sdr/*.local.conf
+deploy/.env
