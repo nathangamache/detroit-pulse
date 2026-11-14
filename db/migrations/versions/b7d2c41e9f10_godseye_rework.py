@@ -30,6 +30,7 @@ CHUNK_COLS = [
     ("duration_s", "real"),
     ("audio_path", "text"),
     ("attempts", "integer NOT NULL DEFAULT 0"),
+    ("claimed_at", "timestamptz"),
     ("error", "text"),
     ("created_at", "timestamptz DEFAULT now()"),
     ("transcribed_at", "timestamptz"),

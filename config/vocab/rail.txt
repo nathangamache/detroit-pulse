@@ -1,0 +1,9 @@
+# Generic North American railroad radio vocabulary (operating rules and detector phrases).
+dispatcher, track warrant, form D, authority, OCS, clear signal, approach, advance approach,
+restricting, stop signal, absolute signal, control point, CP, siding, main one, main two,
+hold the main, take the siding, meet, crew change, hours of service, dog law, recrew,
+yard, yardmaster, shove, couple, cut, set out, pick up, hi-rail, maintenance of way,
+EOT, FRED, head end, rear end, brake pipe, emergency, dynamic brake, distributed power,
+defect detector, milepost, no defects, total axles, train speed, temperature,
+hot box, hot wheel, dragging equipment, high wide, integrity failure, detector out,
+CSX, Norfolk Southern, NS, CN, Grand Trunk, Conrail, Conrail Shared Assets, Amtrak, CPKC

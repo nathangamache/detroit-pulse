@@ -1,0 +1,14 @@
+# Generic Metro Detroit dispatch vocabulary (public road and city names, radio phrases).
+# Least important lines first: faster-whisper keeps only the LAST ~223 prompt tokens,
+# so transcribe/vocab.py puts channel- and area-specific hints after these.
+# Lines starting with # are ignored.
+code 3, code 4, code 1, en route, on scene, on location, clear, back in service,
+structure fire, working fire, PI accident, injury accident, shots fired, welfare check,
+breaking and entering, B and E, larceny, retail fraud, suspicious vehicle, HAZMAT, gas leak,
+EMS, medic, squad, engine, truck, ladder, rescue, chief, battalion, dispatch, mutual aid,
+Wayne County, Oakland County, Washtenaw County,
+8 Mile, 9 Mile, 10 Mile, 11 Mile, 12 Mile, 13 Mile, 14 Mile, 6 Mile, 7 Mile,
+Woodward, Gratiot, Telegraph, Southfield, Michigan Avenue, Ford Road, Plymouth Road,
+I-94, I-96, I-75, I-275, I-696, M-14, US-23, M-10 Lodge, M-39, M-153,
+Dearborn, Livonia, Westland, Canton, Plymouth, Northville, Novi, Farmington Hills,
+Southfield, Royal Oak, Troy, Pontiac, Ann Arbor, Ypsilanti, Saline, Dexter, Chelsea

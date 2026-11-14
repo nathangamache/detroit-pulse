@@ -150,6 +150,7 @@ class TranscriptChunk(Base):
     duration_s = Column(Float)
     audio_path = Column(Text)
     attempts = Column(Integer, nullable=False, default=0)
+    claimed_at = Column(DateTime(timezone=True))
     error = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     transcribed_at = Column(DateTime(timezone=True))
