@@ -4,12 +4,13 @@
 # gitignored and, when present, is used INSTEAD of this file. Never commit personal
 # points. Copy this file to start:  cp config/areas.yaml config/areas.local.yaml
 #
-# coverage_bbox  geocoder results outside it are rejected (Wayne + Oakland + Washtenaw)
+# coverage_bbox  geocoder results outside it are rejected, and the local geocoder index is built
+#                for it (Wayne + Oakland + Washtenaw + Macomb; south, west, north, east)
 # default_bias   point used to bias geocoders when a channel has no bias of its own
 # areas          named circles: used for whisper vocab, channel biasing and API filters
 #   vocab        street/place names whisper should expect there (public names only)
 
-coverage_bbox: {south: 42.02, west: -84.15, north: 42.90, east: -82.85}
+coverage_bbox: {south: 42.01, west: -84.16, north: 42.92, east: -82.68}
 
 default_bias: {lat: 42.3314, lon: -83.0458}      # downtown Detroit
 

@@ -104,8 +104,10 @@ class Area:
         return haversine_km(self.lat, self.lon, lat, lon) <= self.radius_km
 
 
-# Wayne + Oakland + Washtenaw, from api/data/County_Boundaries.geojson extents, padded.
-DEFAULT_COVERAGE_BBOX = BBox(south=42.02, west=-84.15, north=42.90, east=-82.85)
+# Wayne + Oakland + Washtenaw + Macomb: the union of their extents in
+# api/data/County_Boundaries.geojson (42.033..42.898 N, -84.134..-82.706 E), padded ~2 km.
+# Also the default area of the local geocoder index (scripts/build_geocoder_index.py).
+DEFAULT_COVERAGE_BBOX = BBox(south=42.01, west=-84.16, north=42.92, east=-82.68)
 
 
 def coverage_bbox() -> BBox:
