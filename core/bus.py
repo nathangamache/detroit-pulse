@@ -47,7 +47,8 @@ def publish_event(event: str, data: Any) -> None:
     try:
         get_redis().publish(EVENTS_CHANNEL, json.dumps({"event": event, "data": data}, default=str))
     except Exception as e:  # noqa: BLE001 - the UI is best-effort
-        log.warning("publish_event failed", event=event, error=str(e))
+        # not `event=`: structlog's first argument is already called `event` (TypeError)
+        log.warning("publish_event failed", pulse_event=event, error=str(e))
 
 
 def publish_debug(stage: str, channel_id: str, **data: Any) -> None:
