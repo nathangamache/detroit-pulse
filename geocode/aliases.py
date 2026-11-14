@@ -13,7 +13,7 @@ ALIASES = {
     "sinai grace": "Sinai-Grace Hospital", "receiving": "Detroit Receiving Hospital",
     "henry ford": "Henry Ford Hospital", "childrens": "Children's Hospital of Michigan",
     "beaumont royal oak": "Corewell Health William Beaumont University Hospital",
-    "u of m hospital": "University of Michigan Hospital", "mott": "C.S. Mott Children's Hospital",
+    "u of m hospital": "University of Michigan Medical Center", "mott": "C.S. Mott Children's Hospital",
     "st joe's": "Trinity Health Ann Arbor Hospital", "st joes": "Trinity Health Ann Arbor Hospital",
     "ford field": "Ford Field", "little caesars arena": "Little Caesars Arena", "lca": "Little Caesars Arena",
     "comerica": "Comerica Park", "comerica park": "Comerica Park", "the big house": "Michigan Stadium",

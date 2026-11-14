@@ -26,6 +26,10 @@ os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ.pop("DATABASE_URL", None)
 os.environ["PULSE_ADMIN_TOKEN"] = ""
 os.environ["GEOCODER_PROVIDERS"] = "local"      # no network geocoders in tests unless a test opts in
+# never load the real (~1 GB) local index from this box: tests build a tiny fixture index instead
+_NO_INDEX = Path(tempfile.mkdtemp(prefix="pulse-test-geocoder-"))
+os.environ["GEOCODER_DATA_DIR"] = str(_NO_INDEX)
+os.environ["GEOCODER_LOCAL_INDEX"] = str(_NO_INDEX / "index")
 os.environ["LOG_LEVEL"] = "WARNING"
 # Tests read a pristine copy of the committed config (never a developer's *.local.* files).
 _SESSION_CFG = Path(tempfile.mkdtemp(prefix="pulse-test-config-")) / "config"

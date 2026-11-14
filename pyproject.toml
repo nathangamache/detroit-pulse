@@ -26,6 +26,10 @@ dependencies = [
     "redis>=5.0,<9",
     # HTTP for the free geocoders (Census, Nominatim, Photon)
     "httpx>=0.27,<1",
+    # Local geocoder index (geocode/local): fuzzy names, KD-trees, city polygons
+    "rapidfuzz>=3.9,<4",
+    "scipy>=1.14,<2",
+    "shapely>=2.0.6,<3",
     # Config / logging
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5,<3",
@@ -38,10 +42,17 @@ dependencies = [
 dev = [
     "pytest>=8.3",
 ]
+# Only scripts/build_geocoder_index.py needs these (OSM PBF + TIGER shapefile readers);
+# the API/worker images skip them (uv sync --no-default-groups).
+geocoder-build = [
+    "osmium>=4.0,<5",
+    "pyshp>=2.3,<4",
+]
 
 [tool.uv]
 # This is an application, not a library: install deps only, run from the repo root.
 package = false
+default-groups = ["dev", "geocoder-build"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

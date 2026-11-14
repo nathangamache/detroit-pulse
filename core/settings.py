@@ -8,6 +8,7 @@ Secrets are SecretStr so they never show up in reprs or logs.
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
@@ -16,6 +17,12 @@ from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_DIR = Path(__file__).resolve().parent.parent
+
+
+def _default_geocoder_data_dir() -> Path:
+    """$XDG_DATA_HOME/detroit-pulse/geocoder (~/.local/share/...): geocoder data never lives in the repo."""
+    xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(xdg).expanduser() / "detroit-pulse" / "geocoder"
 
 
 class Settings(BaseSettings):
@@ -104,8 +111,10 @@ class Settings(BaseSettings):
 
     # ── Geocoding ($0 providers only) ────────────────────────────────────
     geocoder_providers: str = "local,census,photon"   # order; add "nominatim" to enable it
-    geocoder_local_index: Path | None = None    # directory of the free-geocoder index
-    geocoder_local_backend: str = ""            # "module:Class" implementing geocode(struct, bias)
+    # scripts/build_geocoder_index.py writes <data dir>/index; GEOCODER_LOCAL_INDEX overrides it
+    geocoder_data_dir: Path = Field(default_factory=_default_geocoder_data_dir)
+    geocoder_local_index: Path | None = None
+    geocoder_local_backend: str = "geocode.local:LocalGeocoder"   # "module:Class" with geocode(struct, bias)
     geocoder_user_agent: str = "detroit-pulse-geocoder/0.2 (self-hosted)"
     geocoder_timeout_s: float = 6.0
     nominatim_url: str = "https://nominatim.openstreetmap.org"
@@ -142,6 +151,10 @@ class Settings(BaseSettings):
         return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
     @property
+    def geocoder_index_dir(self) -> Path:
+        return self.geocoder_local_index or (self.geocoder_data_dir / "index")
+
+    @property
     def source_list(self) -> list[str]:
         return [s.strip() for s in self.ingest_sources.split(",") if s.strip()]
 
@@ -158,11 +171,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _resolve_relative_paths(self):
-        """Relative paths in .env are relative to the repo root, not the CWD."""
+        """`~` is expanded; other relative paths in .env are relative to the repo root, not the CWD."""
         for name, fld in type(self).model_fields.items():
             v = getattr(self, name)
-            if isinstance(v, Path) and not v.is_absolute():
-                object.__setattr__(self, name, (REPO_DIR / v).resolve())
+            if isinstance(v, Path):
+                v = v.expanduser()
+                if not v.is_absolute():
+                    v = (REPO_DIR / v).resolve()
+                object.__setattr__(self, name, v)
         return self
 
 
