@@ -1,0 +1,792 @@
+{
+ "description": "Public-place eval phrases for suburban Metro Detroit (Wayne, Oakland) and Ann Arbor. Major intersections, freeway crossings, blocks on main streets and public landmarks only. Ground truth from TIGER/Line 2026 (independent of OSM) via `scripts/eval_geocoder.py truth`. Bias points are public city centres.",
+ "generated": "2026-11-14",
+ "tiger_year": 2026,
+ "n": 28,
+ "phrases": [
+  {
+   "id": "p02",
+   "phrase": "Main and Ann Arbor Road",
+   "area": "wayne_west",
+   "origin": "public-place",
+   "bias": [
+    42.3714,
+    -83.4702
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Main",
+    "street2": "Ann Arbor Road",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "Main St",
+    "Ann Arbor Rd"
+   ],
+   "truth": {
+    "lat": 42.358751,
+    "lon": -83.469534
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Main St x Ann Arbor Rd (shared vertex)"
+  },
+  {
+   "id": "p03",
+   "phrase": "Sheldon and Ford Road",
+   "area": "wayne_west",
+   "origin": "public-place",
+   "bias": [
+    42.3087,
+    -83.4822
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Sheldon",
+    "street2": "Ford Road",
+    "city": "Canton"
+   },
+   "truth_spec": [
+    "troads",
+    "Sheldon Rd",
+    "Ford Rd"
+   ],
+   "truth": {
+    "lat": 42.322161,
+    "lon": -83.478164
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Sheldon Rd x Ford Rd (shared vertex)"
+  },
+  {
+   "id": "p04",
+   "phrase": "Canton Center and Cherry Hill",
+   "area": "wayne_west",
+   "origin": "public-place",
+   "bias": [
+    42.3087,
+    -83.4822
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Canton Center",
+    "street2": "Cherry Hill",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "Canton Center Rd",
+    "Cherry Hill Rd"
+   ],
+   "truth": {
+    "lat": 42.307403,
+    "lon": -83.487166
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Canton Center Rd x Cherry Hill Rd (shared vertex)"
+  },
+  {
+   "id": "p05",
+   "phrase": "Lilley and Michigan Avenue",
+   "area": "wayne_west",
+   "origin": "public-place",
+   "bias": [
+    42.3087,
+    -83.4822
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Lilley",
+    "street2": "Michigan Avenue",
+    "city": "Canton"
+   },
+   "truth_spec": [
+    "troads",
+    "Lilley Rd",
+    "Michigan Ave"
+   ],
+   "truth": {
+    "lat": 42.277198,
+    "lon": -83.456462
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Lilley Rd x Michigan Ave (shared vertex)"
+  },
+  {
+   "id": "p06",
+   "phrase": "Seven Mile and Northville Road",
+   "area": "wayne_west",
+   "origin": "public-place",
+   "bias": [
+    42.4311,
+    -83.4833
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Seven Mile",
+    "street2": "Northville Road",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "7 Mile Rd",
+    "Northville Rd"
+   ],
+   "truth": {
+    "lat": 42.424349,
+    "lon": -83.474005
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: 7 Mile Rd x Northville Rd (shared vertex)"
+  },
+  {
+   "id": "p07",
+   "phrase": "I-275 at Ford Road",
+   "area": "wayne_west",
+   "origin": "public-place",
+   "bias": [
+    42.3087,
+    -83.4822
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "I-275",
+    "street2": "Ford Road",
+    "city": "Canton"
+   },
+   "truth_spec": [
+    "troads_hwy",
+    "I- 275",
+    "Ford Rd"
+   ],
+   "truth": {
+    "lat": 42.323214,
+    "lon": -83.443214
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: I- 275 x Ford Rd (closest approach <60 m)"
+  },
+  {
+   "id": "p08",
+   "phrase": "M-14 at Sheldon",
+   "area": "wayne_west",
+   "origin": "public-place",
+   "bias": [
+    42.3714,
+    -83.4702
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "M-14",
+    "street2": "Sheldon",
+    "city": null
+   },
+   "truth_spec": [
+    "troads_hwy",
+    "State Hwy 14",
+    "Sheldon Rd"
+   ],
+   "truth": {
+    "lat": 42.383397,
+    "lon": -83.4809
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: State Hwy 14 x Sheldon Rd (closest approach <60 m)"
+  },
+  {
+   "id": "o01",
+   "phrase": "Woodward Ave and 9 Mile Rd, Ferndale",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4606,
+    -83.1346
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Woodward Ave",
+    "street2": "9 Mile Rd",
+    "city": "Ferndale"
+   },
+   "truth_spec": [
+    "troads",
+    "Woodward Ave",
+    "9 Mile Rd"
+   ],
+   "truth": {
+    "lat": 42.460581,
+    "lon": -83.134568
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Woodward Ave x 9 Mile Rd (shared vertex)"
+  },
+  {
+   "id": "o02",
+   "phrase": "Woodward and Ten Mile",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4606,
+    -83.1346
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Woodward",
+    "street2": "Ten Mile",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "Woodward Ave",
+    "10 Mile Rd"
+   ],
+   "truth": {
+    "lat": 42.475196,
+    "lon": -83.145435
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Woodward Ave x 10 Mile Rd (shared vertex)"
+  },
+  {
+   "id": "o03",
+   "phrase": "Main Street and Eleven Mile",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4895,
+    -83.1446
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Main Street",
+    "street2": "Eleven Mile",
+    "city": "Royal Oak"
+   },
+   "truth_spec": [
+    "troads",
+    "Main St",
+    "11 Mile Rd"
+   ],
+   "truth": {
+    "lat": 42.489826,
+    "lon": -83.14429
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Main St x 11 Mile Rd (shared vertex)"
+  },
+  {
+   "id": "o04",
+   "phrase": "13 Mile and Crooks",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4895,
+    -83.1446
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "13 Mile",
+    "street2": "Crooks",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "13 Mile Rd",
+    "Crooks Rd"
+   ],
+   "truth": {
+    "lat": 42.518356,
+    "lon": -83.164857
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: 13 Mile Rd x Crooks Rd (shared vertex)"
+  },
+  {
+   "id": "o05",
+   "phrase": "Telegraph and 12 Mile",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4734,
+    -83.2219
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Telegraph",
+    "street2": "12 Mile",
+    "city": "Southfield"
+   },
+   "truth_spec": [
+    "troads",
+    "Telegraph Rd",
+    "12 Mile Rd"
+   ],
+   "truth": {
+    "lat": 42.501108,
+    "lon": -83.28518
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Telegraph Rd x 12 Mile Rd (shared vertex)"
+  },
+  {
+   "id": "o06",
+   "phrase": "Greenfield and Ten Mile",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4734,
+    -83.2219
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Greenfield",
+    "street2": "Ten Mile",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "Greenfield Rd",
+    "10 Mile Rd"
+   ],
+   "truth": {
+    "lat": 42.473848,
+    "lon": -83.201746
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Greenfield Rd x 10 Mile Rd (shared vertex)"
+  },
+  {
+   "id": "o07",
+   "phrase": "Hilton and 9 Mile",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4606,
+    -83.1346
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Hilton",
+    "street2": "9 Mile",
+    "city": "Ferndale"
+   },
+   "truth_spec": [
+    "troads",
+    "Hilton Rd",
+    "9 Mile Rd"
+   ],
+   "truth": {
+    "lat": 42.460891,
+    "lon": -83.123006
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Hilton Rd x 9 Mile Rd (shared vertex)"
+  },
+  {
+   "id": "o08",
+   "phrase": "I-696 at Telegraph",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4734,
+    -83.2219
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "I-696",
+    "street2": "Telegraph",
+    "city": null
+   },
+   "truth_spec": [
+    "troads_hwy",
+    "I- 696",
+    "Telegraph Rd"
+   ],
+   "truth": {
+    "lat": 42.489681,
+    "lon": -83.284534
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: I- 696 x Telegraph Rd (closest approach <60 m)"
+  },
+  {
+   "id": "o09",
+   "phrase": "26000 block of Evergreen, Southfield",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4734,
+    -83.2219
+   ],
+   "structured": {
+    "kind": "block",
+    "number": 26000,
+    "street1": "Evergreen",
+    "city": "Southfield"
+   },
+   "truth_spec": [
+    "tiger_addr",
+    26000,
+    "Evergreen Rd",
+    true
+   ],
+   "truth": {
+    "lat": 42.480528,
+    "lon": -83.240864
+   },
+   "truth_source": "tiger_addr_interp",
+   "tolerance_m": 200,
+   "truth_note": "TIGER ADDRFEAT interpolation of 26000 block Evergreen Rd"
+  },
+  {
+   "id": "o10",
+   "phrase": "the Detroit Zoo",
+   "area": "oakland",
+   "origin": "public-place",
+   "bias": [
+    42.4895,
+    -83.1446
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Detroit Zoo",
+    "city": "Royal Oak"
+   },
+   "truth_spec": [
+    "k",
+    42.4772,
+    -83.1495,
+    800
+   ],
+   "truth": {
+    "lat": 42.4772,
+    "lon": -83.1495
+   },
+   "truth_source": "knowledge",
+   "tolerance_m": 800,
+   "truth_note": "approximate public coordinate"
+  },
+  {
+   "id": "w01",
+   "phrase": "State St and Liberty St, Ann Arbor",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "State St",
+    "street2": "Liberty St",
+    "city": "Ann Arbor"
+   },
+   "truth_spec": [
+    "troads",
+    "State St",
+    "Liberty St"
+   ],
+   "truth": {
+    "lat": 42.279356,
+    "lon": -83.7408
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: State St x Liberty St (shared vertex)"
+  },
+  {
+   "id": "w02",
+   "phrase": "Main Street and Stadium",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Main Street",
+    "street2": "Stadium",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "Main St",
+    "Stadium Blvd"
+   ],
+   "truth": {
+    "lat": 42.264208,
+    "lon": -83.750209
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Main St x Stadium Blvd (shared vertex)"
+  },
+  {
+   "id": "w03",
+   "phrase": "Packard and Stadium",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Packard",
+    "street2": "Stadium",
+    "city": "Ann Arbor"
+   },
+   "truth_spec": [
+    "troads",
+    "Packard St",
+    "Stadium Blvd"
+   ],
+   "truth": {
+    "lat": 42.260788,
+    "lon": -83.729853
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Packard St x Stadium Blvd (shared vertex)"
+  },
+  {
+   "id": "w04",
+   "phrase": "Washtenaw Avenue and Huron Parkway",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Washtenaw Avenue",
+    "street2": "Huron Parkway",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "Washtenaw Ave",
+    "Huron Pkwy"
+   ],
+   "truth": {
+    "lat": 42.256725,
+    "lon": -83.695687
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Washtenaw Ave x Huron Pkwy (shared vertex)"
+  },
+  {
+   "id": "w05",
+   "phrase": "Plymouth Road and Huron Parkway",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Plymouth Road",
+    "street2": "Huron Parkway",
+    "city": "Ann Arbor"
+   },
+   "truth_spec": [
+    "troads",
+    "Plymouth Rd",
+    "Huron Pkwy"
+   ],
+   "truth": {
+    "lat": 42.302608,
+    "lon": -83.704329
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Plymouth Rd x Huron Pkwy (shared vertex)"
+  },
+  {
+   "id": "w06",
+   "phrase": "Jackson Avenue and Maple Road",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Jackson Avenue",
+    "street2": "Maple Road",
+    "city": null
+   },
+   "truth_spec": [
+    "troads",
+    "Jackson Ave",
+    "Maple Rd"
+   ],
+   "truth": {
+    "lat": 42.280552,
+    "lon": -83.780338
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: Jackson Ave x Maple Rd (shared vertex)"
+  },
+  {
+   "id": "w07",
+   "phrase": "US-23 at Washtenaw",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "US-23",
+    "street2": "Washtenaw",
+    "city": null
+   },
+   "truth_spec": [
+    "troads_hwy",
+    "US Hwy 23",
+    "Washtenaw Ave"
+   ],
+   "truth": {
+    "lat": 42.254677,
+    "lon": -83.68384
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: US Hwy 23 x Washtenaw Ave (closest approach <60 m)"
+  },
+  {
+   "id": "w08",
+   "phrase": "I-94 at State Street",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "I-94",
+    "street2": "State Street",
+    "city": "Ann Arbor"
+   },
+   "truth_spec": [
+    "troads_hwy",
+    "I- 94",
+    "State St"
+   ],
+   "truth": {
+    "lat": 42.23697,
+    "lon": -83.739188
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: I- 94 x State St (closest approach <60 m)"
+  },
+  {
+   "id": "w09",
+   "phrase": "300 block of South State Street",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "block",
+    "number": 300,
+    "street1": "South State Street",
+    "city": "Ann Arbor"
+   },
+   "truth_spec": [
+    "tiger_addr",
+    300,
+    "S State St",
+    true
+   ],
+   "truth": {
+    "lat": 42.278813,
+    "lon": -83.740773
+   },
+   "truth_source": "tiger_addr_interp",
+   "tolerance_m": 200,
+   "truth_note": "TIGER ADDRFEAT interpolation of 300 block S State St"
+  },
+  {
+   "id": "w10",
+   "phrase": "Michigan Stadium",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Michigan Stadium",
+    "city": "Ann Arbor"
+   },
+   "truth_spec": [
+    "k",
+    42.2658,
+    -83.7487,
+    500
+   ],
+   "truth": {
+    "lat": 42.2658,
+    "lon": -83.7487
+   },
+   "truth_source": "knowledge",
+   "tolerance_m": 500,
+   "truth_note": "approximate public coordinate"
+  },
+  {
+   "id": "w11",
+   "phrase": "U of M Hospital",
+   "area": "washtenaw",
+   "origin": "public-place",
+   "bias": [
+    42.2808,
+    -83.743
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "University of Michigan Hospital",
+    "city": "Ann Arbor"
+   },
+   "truth_spec": [
+    "arealm",
+    "University of Michigan Medical Ctr"
+   ],
+   "truth": {
+    "lat": 42.283511,
+    "lon": -83.730502
+   },
+   "truth_source": "tiger_arealm",
+   "tolerance_m": 492,
+   "truth_note": "TIGER area landmark 'University of Michigan Medical Ctr' centroid (feature ~493 m across)"
+  }
+ ]
+}

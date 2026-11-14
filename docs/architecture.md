@@ -69,8 +69,9 @@ queued ──transcribe──▶ transcribed ──extract──▶ done
 4. **Fallback**: no key, a cap hit, an API error, a refusal, truncation that survives one
    split, or a missing id all send those items through `extract/rules.py`.
    `transcript_chunks.extract_source` records `claude`, `rules` or `prefilter`.
-5. **Geocode** (`geocode/`): the structured location goes to a $0 chain: local OSM
-   intersection/address index (adapter; index built elsewhere), US Census, Photon,
+5. **Geocode** (`geocode/`): the structured location goes to a $0 chain: the local index
+   (`geocode/local/`: OSM intersections, address points + TIGER ranges, OSM landmarks; built by
+   `scripts/build_geocoder_index.py`, see docs/geocoder.md), US Census, Photon,
    optional Nominatim (1 req/s). Results outside the coverage bbox are rejected; hits and
    misses are cached in `geocode_cache` with the answering provider. Google is removed.
 6. **Correlate** (`correlation/engine.py`, deterministic): unit continuity on the same

@@ -1,0 +1,1814 @@
+{
+ "description": "Metro Detroit geocoder eval set (80 phrases) from the free-geocoder prototype, 2026-11-13. Public places only: generic scanner-style intersections, freeway crossings, blocks, public landmarks, plus phrases already public in this repo's initial commit (afb9a39). Truth from City of Detroit open data, TIGER/Line 2026 and the Census Geocoder; see truth_source.",
+ "generated": "2026-11-13",
+ "n": 80,
+ "phrases": [
+  {
+   "id": "i01",
+   "phrase": "Gratiot and Seven Mile",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Gratiot",
+    "street2": "Seven Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.435083,
+    "lon": -82.977686
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Gratiot Ave x E 7 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i02",
+   "phrase": "Woodward at Grand Boulevard",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Woodward",
+    "street2": "Grand Boulevard",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.370273,
+    "lon": -83.073336
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Woodward Ave x W Grand Blvd; 1 cluster(s)"
+  },
+  {
+   "id": "i03",
+   "phrase": "Fenkell and Wyoming",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Fenkell",
+    "street2": "Wyoming",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.402528,
+    "lon": -83.159681
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Fenkell St x Wyoming St; 1 cluster(s)"
+  },
+  {
+   "id": "i04",
+   "phrase": "Dexter/Davison",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Dexter",
+    "street2": "Davison",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.389754,
+    "lon": -83.130867
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Dexter Ave x W Davison; 1 cluster(s)"
+  },
+  {
+   "id": "i05",
+   "phrase": "Southfield Freeway and Joy Road",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Southfield Freeway",
+    "street2": "Joy Road",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.357853,
+    "lon": -83.216484
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: N M 39 Service Drive x Joy Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i06",
+   "phrase": "Livernois and Six Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Livernois",
+    "street2": "Six Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.417153,
+    "lon": -83.14084
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Livernois Ave x W McNichols Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i07",
+   "phrase": "Eight Mile and Woodward",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Eight Mile",
+    "street2": "Woodward",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.446443,
+    "lon": -83.124882
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Woodward Ave x W 8 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i08",
+   "phrase": "Mack and Alter",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Mack",
+    "street2": "Alter",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.387307,
+    "lon": -82.947687
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Mack Ave x Alter Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i09",
+   "phrase": "East Warren and Conner",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "East Warren",
+    "street2": "Conner",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.389292,
+    "lon": -82.976033
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: E Warren Ave x Conner St; 1 cluster(s)"
+  },
+  {
+   "id": "i10",
+   "phrase": "Harper and Cadieux",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Harper",
+    "street2": "Cadieux",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.416451,
+    "lon": -82.936628
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Harper Ave x Cadieux Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i11",
+   "phrase": "Greenfield and Schoolcraft",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Greenfield",
+    "street2": "Schoolcraft",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.387054,
+    "lon": -83.198164
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Greenfield Rd x Schoolcraft St; 1 cluster(s)"
+  },
+  {
+   "id": "i12",
+   "phrase": "Grand River and Oakman",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Grand River",
+    "street2": "Oakman",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.373522,
+    "lon": -83.150839
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Grand River Ave x Oakman Blvd; 1 cluster(s)"
+  },
+  {
+   "id": "i14",
+   "phrase": "Michigan Avenue and Livernois",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Michigan Avenue",
+    "street2": "Livernois",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.331131,
+    "lon": -83.120328
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Michigan Ave x Livernois Ave; 1 cluster(s)"
+  },
+  {
+   "id": "i15",
+   "phrase": "Vernor and Junction",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Vernor",
+    "street2": "Junction",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.317829,
+    "lon": -83.101823
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: W Vernor Hwy x Junction St; 1 cluster(s)"
+  },
+  {
+   "id": "i16",
+   "phrase": "Jefferson and Alter",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Jefferson",
+    "street2": "Alter",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.374881,
+    "lon": -82.939519
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: E Jefferson Ave x Alter Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i18",
+   "phrase": "Hoover and Seven Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Hoover",
+    "street2": "Seven Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.434429,
+    "lon": -83.004671
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Hoover St x E 7 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i19",
+   "phrase": "Evergreen and Seven Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Evergreen",
+    "street2": "Seven Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.429582,
+    "lon": -83.238856
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Evergreen Rd x W 7 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i20",
+   "phrase": "Telegraph and Eight Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Telegraph",
+    "street2": "Eight Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.442897,
+    "lon": -83.278382
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: Telegraph Rd x W 8 Mile Rd (shared vertex)"
+  },
+  {
+   "id": "i21",
+   "phrase": "Linwood and Davison",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Linwood",
+    "street2": "Davison",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.393024,
+    "lon": -83.122014
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Linwood St x W Davison; 1 cluster(s)"
+  },
+  {
+   "id": "i27",
+   "phrase": "Gratiot and Conner",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Gratiot",
+    "street2": "Conner",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.404921,
+    "lon": -82.997489
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Gratiot Ave x Conner St; 1 cluster(s)"
+  },
+  {
+   "id": "i28",
+   "phrase": "Mound and Seven Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Mound",
+    "street2": "Seven Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.433582,
+    "lon": -83.043598
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Mound Rd x E 7 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i29",
+   "phrase": "Van Dyke and Eight Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Van Dyke",
+    "street2": "Eight Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.448171,
+    "lon": -83.024752
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Van Dyke St x E 8 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i31",
+   "phrase": "John R and Seven Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "John R",
+    "street2": "Seven Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.432279,
+    "lon": -83.102375
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: John R St x E 7 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i32",
+   "phrase": "Dequindre and Eight Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Dequindre",
+    "street2": "Eight Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.447011,
+    "lon": -83.083388
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Dequindre St x E 8 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i33",
+   "phrase": "Grashit and Mack",
+   "area": "detroit",
+   "origin": "whisper-typo",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Grashit",
+    "street2": "Mack",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.359036,
+    "lon": -83.027749
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Gratiot Ave x Mack Ave; 1 cluster(s)"
+  },
+  {
+   "id": "i34",
+   "phrase": "Livernoise and Fenkell",
+   "area": "detroit",
+   "origin": "whisper-typo",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Livernoise",
+    "street2": "Fenkell",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.402675,
+    "lon": -83.140237
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Livernois Ave x Fenkell St; 1 cluster(s)"
+  },
+  {
+   "id": "i35",
+   "phrase": "Shoenherr and Seven Mile",
+   "area": "detroit",
+   "origin": "whisper-typo",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Shoenherr",
+    "street2": "Seven Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.434926,
+    "lon": -82.985111
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Schoenherr St x E 7 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i37",
+   "phrase": "Seven Mile and Gratiot",
+   "area": "detroit",
+   "origin": "reversed-order",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "7 Mile",
+    "street2": "Gratiot",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.435083,
+    "lon": -82.977686
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Gratiot Ave x E 7 Mile Rd; 1 cluster(s)"
+  },
+  {
+   "id": "i38",
+   "phrase": "Wyoming at Fenkel",
+   "area": "detroit",
+   "origin": "whisper-typo",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Wyoming",
+    "street2": "Fenkel",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.402528,
+    "lon": -83.159681
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: Fenkell St x Wyoming St; 1 cluster(s)"
+  },
+  {
+   "id": "s01",
+   "phrase": "three victims at 9 Mile and Woodward",
+   "area": "oakland",
+   "origin": "repo:llm/prompts.py:179 @afb9a39",
+   "bias": [
+    42.49,
+    -83.14
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "9 Mile",
+    "street2": "Woodward",
+    "city": "Ferndale"
+   },
+   "truth": {
+    "lat": 42.460581,
+    "lon": -83.134568
+   },
+   "truth_source": "tiger_intersection",
+   "tolerance_m": 150,
+   "truth_note": "TIGER: Woodward Ave x W 9 Mile Rd; 1 candidate cluster(s) metro-wide"
+  },
+  {
+   "id": "s02",
+   "phrase": "Woodward and 13 Mile",
+   "area": "oakland",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.49,
+    -83.14
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Woodward",
+    "street2": "13 Mile",
+    "city": "Royal Oak"
+   },
+   "truth": {
+    "lat": 42.517849,
+    "lon": -83.1864
+   },
+   "truth_source": "tiger_intersection",
+   "tolerance_m": 150,
+   "truth_note": "TIGER: Woodward Ave x W 13 Mile Rd; 1 candidate cluster(s) metro-wide"
+  },
+  {
+   "id": "s03",
+   "phrase": "Sheldon and Ann Arbor Road",
+   "area": "wayne_west",
+   "origin": "repo:llm/prompts.py:56 @afb9a39",
+   "bias": [
+    42.37,
+    -83.47
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Sheldon",
+    "street2": "Ann Arbor Road",
+    "city": "Plymouth Township"
+   },
+   "truth": {
+    "lat": 42.358502,
+    "lon": -83.479281
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 150,
+   "truth_note": "TIGER 2026 all-roads: N Sheldon Rd x Ann Arbor Rd (shared vertex). Corrected 2026-11-14: the prototype matched TIGER by core key, which merges Ann Arbor Trail with Ann Arbor Road, and took the Ann Arbor Trail crossing 1.45 km north.",
+   "truth_spec": [
+    "troads",
+    "N Sheldon Rd",
+    "Ann Arbor Rd"
+   ]
+  },
+  {
+   "id": "s04",
+   "phrase": "Haggerty and Five Mile",
+   "area": "wayne_west",
+   "origin": "repo:llm/prompts.py:56 @afb9a39",
+   "bias": [
+    42.37,
+    -83.47
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Haggerty",
+    "street2": "Five Mile",
+    "city": "Northville Township"
+   },
+   "truth": {
+    "lat": 42.395812,
+    "lon": -83.438836
+   },
+   "truth_source": "tiger_intersection",
+   "tolerance_m": 150,
+   "truth_note": "TIGER: Haggerty Rd x 5 Mile Rd; 1 candidate cluster(s) metro-wide"
+  },
+  {
+   "id": "s05",
+   "phrase": "Beck and Seven Mile",
+   "area": "wayne_west",
+   "origin": "repo:llm/prompts.py:56 @afb9a39",
+   "bias": [
+    42.37,
+    -83.47
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Beck",
+    "street2": "Seven Mile",
+    "city": "Northville Township"
+   },
+   "truth": {
+    "lat": 42.42318,
+    "lon": -83.511776
+   },
+   "truth_source": "tiger_intersection",
+   "tolerance_m": 150,
+   "truth_note": "TIGER: Beck Rd x 7 Mile Rd; 1 candidate cluster(s) metro-wide"
+  },
+  {
+   "id": "s06",
+   "phrase": "Main and Center",
+   "area": "wayne_west",
+   "origin": "repo:llm/prompts.py:80 @afb9a39",
+   "bias": [
+    42.43,
+    -83.48
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Main",
+    "street2": "Center",
+    "city": "Northville"
+   },
+   "truth": {
+    "lat": 42.431074,
+    "lon": -83.483235
+   },
+   "truth_source": "tiger_intersection",
+   "tolerance_m": 150,
+   "truth_note": "TIGER: E Main St x N Center St; 1 candidate cluster(s) metro-wide"
+  },
+  {
+   "id": "s08",
+   "phrase": "Michigan Avenue and Wayne Road",
+   "area": "wayne_other",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.2
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Michigan Avenue",
+    "street2": "Wayne Road",
+    "city": "Wayne"
+   },
+   "truth": {
+    "lat": 42.281137,
+    "lon": -83.384099
+   },
+   "truth_source": "tiger_intersection",
+   "tolerance_m": 150,
+   "truth_note": "TIGER: E Michigan Ave x S Wayne Rd; 1 candidate cluster(s) metro-wide"
+  },
+  {
+   "id": "s09",
+   "phrase": "Telegraph and Ecorse",
+   "area": "wayne_other",
+   "origin": "repo:llm/prompts.py:32 @afb9a39",
+   "bias": [
+    42.33,
+    -83.2
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Telegraph",
+    "street2": "Ecorse",
+    "city": "Taylor"
+   },
+   "truth": {
+    "lat": 42.255518,
+    "lon": -83.270141
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: S Telegraph Rd x Ecorse Rd (shared vertex)"
+  },
+  {
+   "id": "s11",
+   "phrase": "Units respond Plymouth Road and Forest",
+   "area": "wayne_west",
+   "origin": "repo:test_pipeline.py:80 @afb9a39",
+   "bias": [
+    42.37,
+    -83.47
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "Plymouth Road",
+    "street2": "Forest",
+    "city": "Plymouth"
+   },
+   "truth": null,
+   "truth_source": null,
+   "tolerance_m": null,
+   "truth_note": "no crossing of Plymouth Rd and Forest Ave in TIGER 2026 all-roads (nor a shared OSM node): probably not a real intersection - the repo transcript is synthetic"
+  },
+  {
+   "id": "s12",
+   "phrase": "Still alarm at West 8 Mile and Southfield",
+   "area": "detroit",
+   "origin": "repo:lora/export_dataset.py:182 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "intersection",
+    "street1": "West 8 Mile",
+    "street2": "Southfield",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.444184,
+    "lon": -83.219722
+   },
+   "truth_source": "detroit_centerline_intersection",
+   "tolerance_m": 150,
+   "truth_note": "City of Detroit centerlines: W 8 Mile Rd x Southfield Service Drive; 1 cluster(s)"
+  },
+  {
+   "id": "h01",
+   "phrase": "I-94 at Conner",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "I-94",
+    "street2": "Conner",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.396283,
+    "lon": -82.987917
+   },
+   "truth_source": "detroit_centerline_crossing",
+   "tolerance_m": 250,
+   "truth_note": "Detroit centerlines: closest approach of W I 94 and Conner St"
+  },
+  {
+   "id": "h02",
+   "phrase": "Lodge at Davison",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "Lodge",
+    "street2": "Davison",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.398367,
+    "lon": -83.110096
+   },
+   "truth_source": "detroit_centerline_crossing",
+   "tolerance_m": 250,
+   "truth_note": "Detroit centerlines: closest approach of N M 10 and W M 8"
+  },
+  {
+   "id": "h03",
+   "phrase": "Jeffries at Livernois",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "Jeffries",
+    "street2": "Livernois",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.367318,
+    "lon": -83.13857
+   },
+   "truth_source": "detroit_centerline_crossing",
+   "tolerance_m": 250,
+   "truth_note": "Detroit centerlines: closest approach of W I 96 and Livernois Ave"
+  },
+  {
+   "id": "h04",
+   "phrase": "I-75 at Seven Mile",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "I-75",
+    "street2": "Seven Mile",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.432516,
+    "lon": -83.094702
+   },
+   "truth_source": "detroit_centerline_crossing",
+   "tolerance_m": 250,
+   "truth_note": "Detroit centerlines: closest approach of N I 75 and E 7 Mile Rd"
+  },
+  {
+   "id": "h05",
+   "phrase": "Southfield Freeway at Warren",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "Southfield Freeway",
+    "street2": "Warren",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.343324,
+    "lon": -83.216119
+   },
+   "truth_source": "detroit_centerline_crossing",
+   "tolerance_m": 250,
+   "truth_note": "Detroit centerlines: closest approach of N M 39 and W Warren Ave"
+  },
+  {
+   "id": "h06",
+   "phrase": "I-275 near Five Mile",
+   "area": "wayne_west",
+   "origin": "repo:llm/prompts.py:215 @afb9a39",
+   "bias": [
+    42.37,
+    -83.47
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "I-275",
+    "street2": "Five Mile",
+    "city": "Plymouth"
+   },
+   "truth": {
+    "lat": 42.395981,
+    "lon": -83.431564
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: I- 275 x 5 Mile Rd (shared vertex)"
+  },
+  {
+   "id": "h07",
+   "phrase": "Fisher at Clark",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "Fisher",
+    "street2": "Clark",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.313404,
+    "lon": -83.090846
+   },
+   "truth_source": "detroit_centerline_crossing",
+   "tolerance_m": 250,
+   "truth_note": "Detroit centerlines: closest approach of N I 75 and Clark St"
+  },
+  {
+   "id": "h08",
+   "phrase": "696 at Woodward",
+   "area": "oakland",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.49,
+    -83.14
+   ],
+   "structured": {
+    "kind": "highway_segment",
+    "street1": "696",
+    "street2": "Woodward",
+    "city": "Royal Oak"
+   },
+   "truth": {
+    "lat": 42.475182,
+    "lon": -83.145434
+   },
+   "truth_source": "tiger_roads_crossing",
+   "tolerance_m": 250,
+   "truth_note": "TIGER 2026 all-roads: I- 696 x Woodward Ave (shared vertex)"
+  },
+  {
+   "id": "a01",
+   "phrase": "19000 block of Kelly",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "block",
+    "number": 19000,
+    "street1": "Kelly",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.434875,
+    "lon": -82.95334
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 150,
+   "truth_note": "interpolated between nearest Detroit address points (none inside block) for 19000-19099 Kelly Rd"
+  },
+  {
+   "id": "a02",
+   "phrase": "7400 block of Gratiot",
+   "area": "detroit",
+   "origin": "repo:llm/prompts.py:214 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "block",
+    "number": 7400,
+    "street1": "Gratiot",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.375719,
+    "lon": -83.017137
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 150,
+   "truth_note": "10 Detroit address point(s) for 7400-7499 Gratiot Ave"
+  },
+  {
+   "id": "a03",
+   "phrase": "6 rounds fired at 14303 East Warren",
+   "area": "detroit",
+   "origin": "repo:llm/prompts.py:171 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "address",
+    "number": 14303,
+    "street1": "East Warren",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.395317,
+    "lon": -82.959988
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 60,
+   "truth_note": "1 Detroit address point(s) for 14303 E Warren Ave"
+  },
+  {
+   "id": "a06",
+   "phrase": "18400 block of Fenkell",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "block",
+    "number": 18400,
+    "street1": "Fenkell",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.401442,
+    "lon": -83.222595
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 150,
+   "truth_note": "1 Detroit address point(s) for 18400-18499 Fenkell St"
+  },
+  {
+   "id": "a07",
+   "phrase": "5000 block of Michigan Avenue",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "block",
+    "number": 5000,
+    "street1": "Michigan Avenue",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.330868,
+    "lon": -83.109587
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 150,
+   "truth_note": "interpolated between nearest Detroit address points (none inside block) for 5000-5099 Michigan Ave"
+  },
+  {
+   "id": "a08",
+   "phrase": "1301 Third",
+   "area": "detroit",
+   "origin": "scanner-pattern (DPD HQ)",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "address",
+    "number": 1301,
+    "street1": "Third",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.330172,
+    "lon": -83.058299
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 60,
+   "truth_note": "1 Detroit address point(s) for 1301 3rd Ave"
+  },
+  {
+   "id": "a10",
+   "phrase": "15400 block of Gratiot",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "block",
+    "number": 15400,
+    "street1": "Gratiot",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.448999,
+    "lon": -82.968953
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 150,
+   "truth_note": "8 Detroit address point(s) for 15400-15499 Gratiot Ave"
+  },
+  {
+   "id": "a12",
+   "phrase": "24400 Northwestern",
+   "area": "oakland",
+   "origin": "repo:llm/prompts.py:191 @afb9a39",
+   "bias": [
+    42.47,
+    -83.23
+   ],
+   "structured": {
+    "kind": "address",
+    "number": 24400,
+    "street1": "Northwestern Highway",
+    "city": "Southfield"
+   },
+   "truth": {
+    "lat": 42.468669,
+    "lon": -83.235304
+   },
+   "truth_source": "census_geocoder",
+   "tolerance_m": 200,
+   "truth_note": "Census matched '24400 NORTHWESTERN HWY, SOUTHFIELD, MI, 48075'"
+  },
+  {
+   "id": "a13",
+   "phrase": "Units to 23680 Fordson Drive, Dearborn",
+   "area": "wayne_other",
+   "origin": "repo:lora/export_dataset.py:180 @afb9a39",
+   "bias": [
+    42.32,
+    -83.18
+   ],
+   "structured": {
+    "kind": "address",
+    "number": 23680,
+    "street1": "Fordson Drive",
+    "city": "Dearborn"
+   },
+   "truth": {
+    "lat": 42.306824,
+    "lon": -83.268204
+   },
+   "truth_source": "census_geocoder",
+   "tolerance_m": 200,
+   "truth_note": "Census matched '23680 FORDSON DR, DEARBORN, MI, 48124'"
+  },
+  {
+   "id": "a14",
+   "phrase": "Rescue 2 to 3501 Oakwood, Dearborn",
+   "area": "wayne_other",
+   "origin": "repo:lora/export_dataset.py:184 @afb9a39",
+   "bias": [
+    42.32,
+    -83.18
+   ],
+   "structured": {
+    "kind": "address",
+    "number": 3501,
+    "street1": "Oakwood Boulevard",
+    "city": "Dearborn"
+   },
+   "truth": null,
+   "truth_source": null,
+   "tolerance_m": null,
+   "truth_note": "census lookup needed: 3501 Oakwood Blvd, Dearborn, MI"
+  },
+  {
+   "id": "a15",
+   "phrase": "44000 block of Ann Arbor Road",
+   "area": "wayne_west",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.37,
+    -83.47
+   ],
+   "structured": {
+    "kind": "block",
+    "number": 44000,
+    "street1": "Ann Arbor Road",
+    "city": "Plymouth Township"
+   },
+   "truth": null,
+   "truth_source": null,
+   "tolerance_m": null,
+   "truth_note": "census lookup needed: 44000 Ann Arbor Rd, Plymouth, MI"
+  },
+  {
+   "id": "a16",
+   "phrase": "2799 West Grand Boulevard",
+   "area": "detroit",
+   "origin": "scanner-pattern (Henry Ford Hosp.)",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "address",
+    "number": 2799,
+    "street1": "West Grand Boulevard",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.368285,
+    "lon": -83.083428
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 60,
+   "truth_note": "1 Detroit address point(s) for 2799 W Grand Blvd"
+  },
+  {
+   "id": "l01",
+   "phrase": "the Meijer on Eight Mile and Woodward",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Meijer",
+    "street1": "Eight Mile",
+    "street2": "Woodward",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.444689,
+    "lon": -83.119035
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 300,
+   "truth_note": "1 Detroit address point(s) for 1301 W 8 Mile Rd"
+  },
+  {
+   "id": "l02",
+   "phrase": "Henry Ford Hospital",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Henry Ford Hospital",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.368285,
+    "lon": -83.083428
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 400,
+   "truth_note": "1 Detroit address point(s) for 2799 W Grand Blvd"
+  },
+  {
+   "id": "l03",
+   "phrase": "Eastern Market",
+   "area": "detroit",
+   "origin": "task",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Eastern Market",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.349048,
+    "lon": -83.041871
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 500,
+   "truth_note": "1 Detroit address point(s) for 2934 Russell St"
+  },
+  {
+   "id": "l04",
+   "phrase": "Sinai-Grace",
+   "area": "detroit",
+   "origin": "repo:geocode/geocoder.py:408 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Sinai-Grace Hospital",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.41886,
+    "lon": -83.181825
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 400,
+   "truth_note": "1 Detroit address point(s) for 6071 W Outer Dr"
+  },
+  {
+   "id": "l05",
+   "phrase": "Detroit Receiving",
+   "area": "detroit",
+   "origin": "repo:geocode/geocoder.py:413 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Detroit Receiving Hospital",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.353567,
+    "lon": -83.054871
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 400,
+   "truth_note": "1 Detroit address point(s) for 4201 St Antoine St"
+  },
+  {
+   "id": "l06",
+   "phrase": "Ren Cen",
+   "area": "detroit",
+   "origin": "repo:llm/prompts.py:211 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Renaissance Center",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.3293,
+    "lon": -83.0397
+   },
+   "truth_source": "knowledge",
+   "tolerance_m": 400,
+   "truth_note": "hand-entered approximate coordinate; tolerance reflects uncertainty/feature size"
+  },
+  {
+   "id": "l07",
+   "phrase": "MGM",
+   "area": "detroit",
+   "origin": "repo:llm/prompts.py:206 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "MGM Grand Detroit",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.333316,
+    "lon": -83.060482
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 400,
+   "truth_note": "1 Detroit address point(s) for 1777 3rd Ave"
+  },
+  {
+   "id": "l08",
+   "phrase": "Comerica Park",
+   "area": "detroit",
+   "origin": "repo:llm/prompts.py:210 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Comerica Park",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.339251,
+    "lon": -83.048873
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 400,
+   "truth_note": "1 Detroit address point(s) for 2100 Woodward Ave"
+  },
+  {
+   "id": "l09",
+   "phrase": "Belle Isle",
+   "area": "detroit",
+   "origin": "repo:llm/prompts.py:205 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Belle Isle",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.341,
+    "lon": -82.987
+   },
+   "truth_source": "knowledge",
+   "tolerance_m": 2000,
+   "truth_note": "hand-entered approximate coordinate; tolerance reflects uncertainty/feature size"
+  },
+  {
+   "id": "l10",
+   "phrase": "St. John hospital on Moross",
+   "area": "detroit",
+   "origin": "scanner-pattern",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Ascension St. John Hospital",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.419997,
+    "lon": -82.915047
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 500,
+   "truth_note": "1 Detroit address point(s) for 22101 Moross Rd"
+  },
+  {
+   "id": "l11",
+   "phrase": "Coleman Young Airport",
+   "area": "detroit",
+   "origin": "repo:geocode/geocoder.py:423 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Coleman A. Young International Airport",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.4092,
+    "lon": -83.0099
+   },
+   "truth_source": "knowledge",
+   "tolerance_m": 1500,
+   "truth_note": "hand-entered approximate coordinate; tolerance reflects uncertainty/feature size"
+  },
+  {
+   "id": "l12",
+   "phrase": "DTW",
+   "area": "wayne_other",
+   "origin": "repo:llm/prompts.py:213 @afb9a39",
+   "bias": [
+    42.33,
+    -83.2
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Detroit Metropolitan Wayne County Airport",
+    "city": "Romulus"
+   },
+   "truth": {
+    "lat": 42.2124,
+    "lon": -83.3534
+   },
+   "truth_source": "knowledge",
+   "tolerance_m": 3000,
+   "truth_note": "hand-entered approximate coordinate; tolerance reflects uncertainty/feature size"
+  },
+  {
+   "id": "l13",
+   "phrase": "Rouge Park",
+   "area": "detroit",
+   "origin": "repo:llm/prompts.py:204 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Rouge Park",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.36141,
+    "lon": -83.2536
+   },
+   "truth_source": "detroit_city_parks",
+   "tolerance_m": 1500,
+   "truth_note": "City of Detroit city_parks layer: Rouge Park polygon centroid (1122.65 acres)"
+  },
+  {
+   "id": "l14",
+   "phrase": "Ninth Precinct",
+   "area": "detroit",
+   "origin": "task (precinct names)",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Detroit Police 9th Precinct",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.409421,
+    "lon": -82.995417
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 200,
+   "truth_note": "1 Detroit address point(s) for 11187 Gratiot Ave"
+  },
+  {
+   "id": "l17",
+   "phrase": "Stevenson High School",
+   "area": "wayne_west",
+   "origin": "repo:llm/prompts.py:198 @afb9a39",
+   "bias": [
+    42.37,
+    -83.47
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Stevenson High School",
+    "city": "Livonia"
+   },
+   "truth": {
+    "lat": 42.411529,
+    "lon": -83.38105
+   },
+   "truth_source": "census_geocoder",
+   "tolerance_m": 200,
+   "truth_note": "Census matched '33500 6 MILE RD, LIVONIA, MI, 48152'"
+  },
+  {
+   "id": "l18",
+   "phrase": "Maybury State Park",
+   "area": "wayne_west",
+   "origin": "repo:llm/prompts.py:201 @afb9a39",
+   "bias": [
+    42.43,
+    -83.48
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Maybury State Park",
+    "city": "Northville"
+   },
+   "truth": {
+    "lat": 42.431,
+    "lon": -83.545
+   },
+   "truth_source": "knowledge",
+   "tolerance_m": 1500,
+   "truth_note": "hand-entered approximate coordinate; tolerance reflects uncertainty/feature size"
+  },
+  {
+   "id": "l19",
+   "phrase": "Beaumont Hospital Royal Oak",
+   "area": "oakland",
+   "origin": "repo:llm/prompts.py:199 @afb9a39",
+   "bias": [
+    42.49,
+    -83.14
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Beaumont Hospital",
+    "city": "Royal Oak"
+   },
+   "truth": {
+    "lat": 42.5172,
+    "lon": -83.1946
+   },
+   "truth_source": "knowledge",
+   "tolerance_m": 500,
+   "truth_note": "hand-entered approximate coordinate; tolerance reflects uncertainty/feature size"
+  },
+  {
+   "id": "l21",
+   "phrase": "Waterford Bend apartments",
+   "area": "wayne_west",
+   "origin": "repo:llm/prompts.py:197 @afb9a39",
+   "bias": [
+    42.37,
+    -83.47
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Waterford Bend Apartments",
+    "city": "Plymouth"
+   },
+   "truth": null,
+   "truth_source": null,
+   "tolerance_m": null,
+   "truth_note": null
+  },
+  {
+   "id": "l22",
+   "phrase": "Fifth Precinct",
+   "area": "detroit",
+   "origin": "task (precinct names)",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "landmark",
+    "name": "Detroit Police 5th Precinct",
+    "city": "Detroit"
+   },
+   "truth": {
+    "lat": 42.381807,
+    "lon": -82.965901
+   },
+   "truth_source": "detroit_address_pts",
+   "tolerance_m": 200,
+   "truth_note": "1 Detroit address point(s) for 3500 Conner St"
+  },
+  {
+   "id": "n01",
+   "phrase": "Car 42, go to channel 3 for traffic",
+   "area": "detroit",
+   "origin": "repo:lora/export_dataset.py:158 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "none"
+   },
+   "truth": null,
+   "truth_source": null,
+   "tolerance_m": null,
+   "truth_note": null
+  },
+  {
+   "id": "n02",
+   "phrase": "Engine 30 responding, 6 rounds fired at the intersection",
+   "area": "detroit",
+   "origin": "repo:lora/export_dataset.py:155 @afb9a39",
+   "bias": [
+    42.33,
+    -83.05
+   ],
+   "structured": {
+    "kind": "none"
+   },
+   "truth": null,
+   "truth_source": null,
+   "tolerance_m": null,
+   "truth_note": null
+  }
+ ],
+ "corrections": [
+  "2026-11-14 s03: truth moved from the Ann Arbor Trail crossing to the Ann Arbor Road crossing"
+ ]
+}

@@ -25,7 +25,7 @@ Docs: [architecture](docs/architecture.md) · [SDR ingest](docs/sdr-ingest.md) �
 | Broadcastify CDN streams via ffmpeg, 25 s chunks | Own receivers: rtl_airband one-file-per-transmission (+ trunk-recorder), traintap EOT/HOT. Broadcastify capture removed (Terms §9 forbid automated capture and AI transcription). |
 | Whisper large-v3 on CUDA fp16, torch | faster-whisper small.en (or medium.en) on CPU int8, Silero VAD via onnxruntime, no torch |
 | Qwen2.5-7B + LoRA via Ollama, 3-6 calls per chunk | One structured Claude Haiku 5.5 call per 10 transmissions, rule prefilter, daily/monthly caps, rules-only fallback |
-| Google geocoding | $0 chain: local OSM index (adapter), US Census, Photon, optional Nominatim |
+| Google geocoding | $0 chain: local index (OSM + TIGER + Detroit/Oakland address points, [docs/geocoder.md](docs/geocoder.md)), US Census, Photon, optional Nominatim |
 | Redis-held incidents, three resolvers | Postgres/PostGIS is the source of truth; one resolver |
 | Mapbox (token) | MapLibre + OpenFreeMap (keyless) |
 | Unauthenticated /admin and /audio/stream | Bearer-token API, admin off unless configured, no audio relay |
@@ -53,6 +53,7 @@ cp config/channels.yaml config/channels.local.yaml    # your SDR channels
 uv run python scripts/import_fcc_uls.py --uls-dir /path/to/l_LMpriv   # rail plan from FCC ULS
 uv run python scripts/build_fewshots.py --train /path/to/normalize_train.jsonl \
     --eval /path/to/normalize_eval.jsonl                               # TRAIN-only few-shots
+nice -n 19 uv run python scripts/build_geocoder_index.py   # local geocoder index -> ~/.local/share/detroit-pulse/geocoder
 
 # UI (served by the gateway from frontend/dist at /pulse/)
 cd frontend && npm ci && nice -n 19 npx vite build && cd ..
@@ -90,6 +91,7 @@ nice -n 19 uv run pytest -m whisper     # real faster-whisper run from a local m
 uv run python scripts/measure_prefilter.py --train …/normalize_train.jsonl --archive-db detroitpulse_archive
 uv run python scripts/eval_extract.py --eval …/normalize_eval.jsonl --mock rules   # $0
 uv run python scripts/eval_extract.py --eval …/normalize_eval.jsonl --real --limit 10   # one real batch, <= $0.25 meter
+uv run python scripts/eval_geocoder.py  # local geocoder vs 105 public phrases with ground truth (no network)
 ```
 
 No test ever calls the real Claude API; the eval's real mode runs exactly one batch under
@@ -103,6 +105,9 @@ its own spend meter.
 * No Broadcastify audio, no RadioReference data (its terms forbid AI/ML use), no Google
   geocoding results.
 * Map tiles: © OpenStreetMap contributors, OpenMapTiles, served by OpenFreeMap.
+* Geocoding: OpenStreetMap (ODbL, attribution shown on the map; the built index stays private),
+  TIGER/Line and City of Detroit data (public domain), Oakland County Open Data (terms of use).
+  The index and its downloads live outside the repo. Licences: [docs/geocoder.md](docs/geocoder.md).
 
 ## Repository layout
 
@@ -113,10 +118,10 @@ its own spend meter.
 | `transcribe/` | faster-whisper worker and vocabulary prompt |
 | `extract/` | prefilter, batched Claude extractor, schema, prompt, cost meter, rules fallback, summaries, worker |
 | `rail/` | defect-detector parser, EOT interpretation, spoken-number parsing |
-| `geocode/` | provider interface, local/Census/Nominatim/Photon, Postgres cache, chain |
+| `geocode/` | provider interface, local index (`geocode/local/`), Census/Nominatim/Photon, Postgres cache, chain |
 | `correlation/` | deterministic correlation engine and resolver |
 | `api/` | FastAPI app: `/v1` gateway contract, UI routes, admin, WebSocket |
 | `db/` | ORM models, alembic migrations, `schema.sql` reference |
 | `frontend/` | React + MapLibre UI (Vite, base `/pulse/`) |
-| `scripts/` | archive restore, FCC ULS import, few-shot builder, prefilter and extraction evals |
+| `scripts/` | archive restore, FCC ULS import, few-shot builder, geocoder index build, prefilter/extraction/geocoder evals |
 | `lora/` | legacy QLoRA/Ollama tooling from the GPU era; not used by this pipeline and its dependencies aren't installed |

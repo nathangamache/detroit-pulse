@@ -107,6 +107,11 @@ export default function Map({ incidents, selectedId, onSelectIncident, layers = 
       style:     MAP_STYLE,
       center:    DETROIT_CENTER,
       zoom:      DEFAULT_ZOOM,
+      // incident points come from the local geocoder (OSM is ODbL: attribution required)
+      attributionControl: {
+        compact: true,
+        customAttribution: 'Locations geocoded with data © OpenStreetMap contributors (ODbL) and US Census TIGER/Line',
+      },
     })
 
     mapRef.current = map
