@@ -156,7 +156,10 @@ Do not use RadioReference data.
 
 Give a subdivision `aliases:` when other datasets name the track differently (FRA's
 crossing inventory and NARN don't always agree): the gateway passes NARN's name as the
-`subdivision` hint, and Pulse matches it against names and aliases.
+`subdivision` hint, and Pulse matches it exactly (once normalised) against names and aliases.
+The hint only picks among lines whose `center` + `radius_km` (or `bbox`) contains the point:
+give every subdivision one, sized to what its receiver really hears, or no point counts as
+covered by it.
 
 ## 4. Defect detectors
 

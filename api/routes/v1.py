@@ -16,8 +16,8 @@ from sqlalchemy import text
 from core.config_files import (RAIL_KINDS, RAIL_VOICE_KINDS, Channel, haversine_km, load_areas, load_channels,
                                load_subdivisions, norm_line_name)
 from core.db import get_engine
-from core.receivers import (RECEIVER_STATES, ReceiverView, channel_matches_hint, coverage_for, coverage_summary,
-                            on_subdivision)
+from core.receivers import (RECEIVER_STATES, ReceiverView, channel_covers_point, channel_matches_hint, coverage_for,
+                            coverage_summary, on_subdivision)
 from core.settings import get_settings
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -223,44 +223,78 @@ def _channels_n(n: int) -> str:
     return f"{n} channel" + ("" if n == 1 else "s")
 
 
-def _voice_notes(chans: list[Channel], rstate: dict[str, dict], heard: bool) -> list[str]:
+def _recordings_n(n: int) -> str:
+    return f"{n} recording" + ("" if n == 1 else "s")
+
+
+def _unread_note(unread: dict[str, int]) -> str | None:
+    """The sentence for recordings in the window that have no text in `transcripts` (still
+    queued or transcribing, failed, or whisper found no speech): traffic was heard, so this is
+    never a quiet line."""
+    parts = []
+    if unread.get("pending"):
+        parts.append(f"{_recordings_n(unread['pending'])} not transcribed yet")
+    if unread.get("error"):
+        parts.append(f"{_recordings_n(unread['error'])} whose transcription failed (error)")
+    if unread.get("no_speech"):
+        parts.append(f"{_recordings_n(unread['no_speech'])} with no speech to transcribe")
+    if not parts:
+        return None
+    listed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    return (f"Recorded on this line in the window but not in `transcripts`: {listed}. "
+            "That is radio traffic, not a quiet line.")
+
+
+def _voice_notes(chans: list[Channel], rstate: dict[str, dict], heard: bool,
+                 unread: dict[str, int] | None = None) -> list[str]:
     """`coverage.note` sentences for a line's enabled, non-example voice channels. Only a channel
-    whose receiver is `online` can be called quiet; when the line is only partly listened to, the
-    channels with no receiver (`not_installed`) or an `offline` one are counted as not covered."""
+    whose receiver is `online` can be called quiet, and only when nothing was recorded on the line
+    in the window: `heard` (any transcript) or `unread` (recordings with no text yet, by kind)
+    means traffic. When the line is only partly listened to, the channels with no receiver
+    (`not_installed`) or an `offline` one are counted as not covered."""
     if not chans:
         return ["No monitored rail voice channel for this location yet; add it to config/channels.local.yaml "
                 "and config/rail_channels.local.yaml once a receiver covers it."]
+    unread_note = _unread_note(unread or {})
+    heard = heard or unread_note is not None
     by_state = {s: [c for c in chans if rstate[c.id]["state"] == s] for s in RECEIVER_STATES}
     on, off, missing = by_state["online"], by_state["offline"], by_state["not_installed"]
     last_off = max((rstate[c.id].get("last_seen_at") or "" for c in off), default="")
+    notes, gap = [], None
     if not off and not missing:
-        return [] if heard else ["The rail voice receiver is online and nothing was heard on these channels in the "
-                                 "window: they were quiet."]
-    if not on and not off:
-        return ["Rail voice channels for this line are configured, but no receiver has ever reported for them "
-                "(the SDR isn't installed or running yet): no transcripts here means no coverage, not a quiet line."]
-    if not on and not missing:
-        return [f"The rail voice receiver for this line is offline (last heard {last_off}): no transcripts here "
-                "means no coverage, not a quiet line."]
-    # a mix: say "quiet" of the online channels only, and name the gap
-    notes = []
-    if not on:
-        notes.append("No rail voice receiver for this line is online.")
-    elif not heard:
-        one = len(on) == 1
-        notes.append(f"The rail voice receiver is online for {len(on)} of {_channels_n(len(chans))} on this line "
-                     f"({', '.join(c.label for c in on)}) and nothing was heard on {'it' if one else 'them'} in the "
-                     f"window: {'that channel was' if one else 'those channels were'} quiet.")
-    gaps = []
-    if missing:
-        gaps.append(f"{_channels_n(len(missing))} with no receiver (none has ever reported for "
-                    f"{'it' if len(missing) == 1 else 'them'})")
-    if off:
-        gaps.append(f"{_channels_n(len(off))} whose receiver is offline (last heard {last_off})")
-    notes.append(f"Not covered: {' and '.join(gaps)}. No transcripts on "
-                 f"{'that channel' if len(missing) + len(off) == 1 else 'those channels'} means no coverage, "
-                 "not a quiet line.")
-    return notes
+        if not heard:
+            notes.append("The rail voice receiver is online and nothing was heard on these channels in the "
+                         "window: they were quiet.")
+    elif not on and not off:
+        notes.append("Rail voice channels for this line are configured, but no receiver has ever reported for them "
+                     "(the SDR isn't installed or running yet): no transcripts here means no coverage, not a quiet "
+                     "line.")
+    elif not on and not missing:
+        notes.append(f"The rail voice receiver for this line is offline (last heard {last_off}): no transcripts here "
+                     "means no coverage, not a quiet line.")
+    else:
+        # a mix: say "quiet" of the online channels only, and name the gap
+        if not on:
+            notes.append("No rail voice receiver for this line is online.")
+        elif not heard:
+            one = len(on) == 1
+            notes.append(f"The rail voice receiver is online for {len(on)} of {_channels_n(len(chans))} on this "
+                         f"line ({', '.join(c.label for c in on)}) and nothing was heard on {'it' if one else 'them'} "
+                         f"in the window: {'that channel was' if one else 'those channels were'} quiet.")
+        gaps = []
+        if missing:
+            gaps.append(f"{_channels_n(len(missing))} with no receiver (none has ever reported for "
+                        f"{'it' if len(missing) == 1 else 'them'})")
+        if off:
+            gaps.append(f"{_channels_n(len(off))} whose receiver is offline (last heard {last_off})")
+        gap = (f"Not covered: {' and '.join(gaps)}. No transcripts on "
+               f"{'that channel' if len(missing) + len(off) == 1 else 'those channels'} means no coverage, "
+               "not a quiet line.")
+    return notes + [n for n in (unread_note, gap) if n]
+
+
+def _line_label(railroad: str | None, name: str) -> str:
+    return f"{railroad} {name}" if railroad else name
 
 
 @router.get("/rail/activity")
@@ -269,13 +303,14 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
     if not 1 <= since_minutes <= 720:
         raise _bad("since_minutes must be between 1 and 720")
     since = datetime.now(timezone.utc) - timedelta(minutes=since_minutes)
-    all_subs = load_subdivisions()
-    subs = [sd for sd in all_subs if sd.near(lat, lon)]
+    rr = (railroad or "").strip().upper()
+    # A railroad hint keeps that railroad's lines; when it names none, none is left (never all).
+    rr_subs = [sd for sd in load_subdivisions() if not rr or sd.railroad.upper() == rr]
+    # Only lines whose monitored area (center+radius or bbox) contains the point. The subdivision
+    # hint never adds a line the point is outside: it puts the line it names first.
+    subs = [sd for sd in rr_subs if sd.near(lat, lon)]
     if subdivision:
-        # the hint may use another dataset's name for the track (NARN vs FRA): aliases count
-        subs += [sd for sd in all_subs if sd.matches(subdivision) and sd not in subs]
-    if railroad:
-        subs = [sd for sd in subs if sd.railroad.upper() == railroad.upper()] or subs
+        subs.sort(key=lambda sd: not sd.matches(subdivision, exact=True))
     chans = _channels()
     voice: dict[str, Channel] = {}
     for sd in subs:
@@ -285,10 +320,19 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
         for c in chans.values():
             if c.kind in RAIL_VOICE_KINDS and on_subdivision(c, sd):
                 voice[c.id] = c
-    if subdivision and not subs:
+    hinted: list[Channel] = []
+    if subdivision:
+        # The hint may use another dataset's name for the track (NARN vs FRA): aliases count, but
+        # only exactly (normalised). A channel for the named line counts only where its own
+        # receiver area contains the point, never just because the name matched.
+        named = [sd for sd in rr_subs if sd.matches(subdivision, exact=True)]
+        areas = load_areas()
         for c in chans.values():
-            if c.kind in RAIL_VOICE_KINDS and channel_matches_hint(c, subdivision):
-                voice[c.id] = c
+            if c.kind in RAIL_VOICE_KINDS and (channel_matches_hint(c, subdivision, railroad)
+                                               or any(on_subdivision(c, sd) for sd in named)):
+                hinted.append(c)
+                if c.id not in voice and channel_covers_point(c, lat, lon, rr_subs, areas):
+                    voice[c.id] = c
     eot_chans = [c for c in chans.values() if c.kind == "eot" and c.enabled and
                  (c.bias_lat is None or haversine_km(c.bias_lat, c.bias_lon, lat, lon) <= 25)]
     sub_name = subs[0].name if subs else subdivision
@@ -309,6 +353,13 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
                AND raw_transcript IS NOT NULL AND raw_transcript <> ''
              ORDER BY coalesce(captured_at, "timestamp") DESC LIMIT 100"""),
                        {"ids": ids, "since": since}).mappings().all() if ids else []
+        # Recordings in the window with no text yet are traffic too: never let them read as quiet.
+        unread = {k: int(n) for k, n in c.execute(text("""
+            SELECT CASE status WHEN 'error' THEN 'error' WHEN 'done' THEN 'no_speech' ELSE 'pending' END, count(*)
+              FROM transcript_chunks
+             WHERE channel_id = ANY(CAST(:ids AS text[])) AND coalesce(captured_at, "timestamp") >= :since
+               AND coalesce(raw_transcript, '') = ''
+             GROUP BY 1"""), {"ids": ids, "since": since}).all()} if ids else {}
         det = c.execute(text("""
             SELECT ts, detector_name, railroad, subdivision, milepost, track, axle_count, speed_mph, temperature_f,
                    result, alarms, raw_text
@@ -374,7 +425,15 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
     coverage_channels = [{k: v for k, v in x.items() if v is not None} for x in coverage_channels]
     real_voice = [c for c in voice.values() if c.enabled and not c.is_example]
     real_eot = [c for c in eot_chans if not c.is_example]
-    notes = _voice_notes(real_voice, rstate, heard=bool(transcripts))
+    notes = _voice_notes(real_voice, rstate, heard=bool(transcripts), unread=unread)
+    real_hinted = [c for c in hinted if c.enabled and not c.is_example]
+    if real_hinted and not any(c.id in voice for c in real_hinted):
+        sd = next((sd for sd in rr_subs if sd.matches(subdivision, exact=True)), None)
+        c0 = real_hinted[0]
+        line = _line_label(sd.railroad, sd.name) if sd else _line_label(c0.railroad, c0.subdivision or c0.label)
+        notes.append(f"Pulse monitors the {line} line, but no receiver for it covers this point (it is outside "
+                     "that line's monitored area): nothing from that line is reported here, and no transcripts "
+                     "here means no coverage, not a quiet line.")
     estates = {rstate[c.id]["state"] for c in real_eot}
     if real_eot and "online" not in estates:
         notes.append("The EOT/HOT receiver is offline: an empty eot_hot list means no coverage." if "offline" in estates
@@ -386,6 +445,8 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
            "coverage": {"covered": covered, "channels": coverage_channels},
            "transcripts": transcripts, "detector_readouts": readouts, "eot_hot": eot_out,
            "reason_labels": reason_labels}
+    if any(unread.values()):
+        out["coverage"]["recordings_without_text"] = {k: unread.get(k, 0) for k in ("pending", "error", "no_speech")}
     if notes:
         out["coverage"]["note"] = " ".join(notes)
     if sub_name:

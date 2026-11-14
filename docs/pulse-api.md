@@ -43,15 +43,25 @@ close, else the latest per-transmission short summary.
 
 ### `rail_activity_near`
 
-1. Subdivisions are taken from `config/rail_channels(.local).yaml`: those whose center+radius
-   or bbox contains the point, plus any whose name **or alias** contains the `subdivision`
-   hint; the `railroad` hint narrows them. Names are compared normalised (case, punctuation,
-   a trailing "(CSXT)" owner tag and the word "Sub"/"Subdivision" ignored), so the gateway's
-   NARN-based hint finds a line that FRA names differently when the alias is configured.
+1. Subdivisions are taken from `config/rail_channels(.local).yaml`: only those whose
+   center+radius or bbox contains the point. The `railroad` hint keeps that railroad's; when
+   it matches none, none is left (never all of them). The `subdivision` hint never adds a line
+   the point is outside: it puts the line it names first, and it matches a name **or alias**
+   exactly once both are normalised (case, punctuation, a trailing "(CSXT)" owner tag and the
+   word "Sub"/"Subdivision" ignored; never a substring, so "est" names nothing), so the
+   gateway's NARN-based hint finds a line that FRA names differently when the alias is
+   configured.
 2. Monitored voice channels are the ones linked from those subdivisions (`channel_id`) or
    whose `subdivision` or `coverage.lines` names in `config/channels(.local).yaml` match one
-   of the subdivision's names (railroad permitting). EOT/HOT telemetry is included when an
-   `eot` channel exists and either has no `bias` point or is within 25 km.
+   of the subdivision's names (railroad permitting). A channel the `subdivision` hint names
+   (its own line names, or a subdivision the hint names) is added only when its own receiver
+   area contains the point: its `bias` point or `area_id` area, with `coverage.radius_km`
+   (else the area's radius), or a subdivision it is on whose area contains the point. A name
+   match alone is never coverage. So a point outside every monitored area gets
+   `covered: false`, no voice channels, transcripts or detector readouts, and, when the hint
+   names a monitored line, a note that no receiver for that line covers this point. EOT/HOT
+   telemetry is included when an `eot` channel exists and either has no `bias` point (shown
+   unfiltered, with a note) or is within 25 km.
 3. Each `coverage.channels[]` entry has an extra `receiver_state` (`not_installed` /
    `offline` / `online`, as in `feeds_status` below). `coverage.covered` is true only when a
    receiver has reported for at least one enabled, non-example matched channel (state
@@ -67,6 +77,12 @@ close, else the latest per-transmission short summary.
    if nothing was heard, and "Not covered: 9 channels with no receiver ... and K channels
    whose receiver is offline (last heard ...)". `covered` keeps its meaning above.
    Detector readouts also match the subdivision's aliases.
+   **Any recording on those channels in the window is traffic, never quiet**, text or not:
+   one still `queued`/`transcribing`, one whose transcription failed (`error`), or one whisper
+   found no speech in (`done` with an empty transcript) isn't in `transcripts` but is
+   counted in `coverage.recordings_without_text` (`{"pending", "error", "no_speech"}`, only
+   when one of them is non-zero), and the note says e.g. "5 recordings not transcribed yet
+   ... That is radio traffic, not a quiet line." instead of "quiet".
 4. `transcripts`: rail traffic on those channels, newest first, each with `reason_label`.
 5. `detector_readouts` from `rail_detector_events`; `defects` lists alarm types (`[]` = no
    defects; `["integrity_failure"]` when the detector reported a failure).

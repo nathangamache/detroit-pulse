@@ -32,8 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.config_files import (RAIL_KINDS, Area, Channel, RailLine, Subdivision, load_receiver_devices,
-                               names_match)
+from core.config_files import (RAIL_KINDS, Area, Channel, RailLine, Subdivision, haversine_km,
+                               load_receiver_devices, names_match)
 from core.settings import Settings, get_settings
 
 RECEIVER_STATES = ("not_installed", "offline", "online")
@@ -172,11 +172,31 @@ def on_subdivision(ch: Channel, sd: Subdivision) -> bool:
     return False
 
 
-def channel_matches_hint(ch: Channel, hint: str) -> bool:
-    names = [ch.subdivision] if ch.subdivision else []
-    for ln in ch.coverage_lines or []:
-        names += ln.names()
-    return names_match(hint, names)
+def channel_matches_hint(ch: Channel, hint: str, railroad: str | None = None) -> bool:
+    """Does `hint` name a line `ch` hears (its `subdivision`, or a `coverage.lines` name or
+    alias)? Exact once normalised (norm_line_name), never a substring: "est" names nothing.
+    With `railroad`, the line must be that railroad's (a line with no railroad isn't)."""
+    rr = (railroad or "").strip().upper()
+    lines = [(ch.railroad or "", [ch.subdivision])] if ch.subdivision else []
+    lines += [(ln.railroad or ch.railroad or "", ln.names()) for ln in ch.coverage_lines or []]
+    return any((not rr or line_rr.upper() == rr) and names_match(hint, names, exact=True)
+               for line_rr, names in lines)
+
+
+def channel_covers_point(ch: Channel, lat: float, lon: float, subs: list[Subdivision], areas: list[Area]) -> bool:
+    """Does `ch`'s receiver reach (lat, lon)? Only a place on record counts: the channel's
+    `bias` point with a `coverage.radius_km`, its `area_id` area (radius: `coverage.radius_km`,
+    else the area's), or a subdivision it is on whose center+radius / bbox contains the point.
+    A channel with none of these covers no point: a hint naming its line is not enough."""
+    area = next((a for a in areas if a.id == ch.area_id), None) if ch.area_id else None
+    radius = ch.coverage_radius_km if ch.coverage_radius_km is not None else (area.radius_km if area else None)
+    if radius is not None:
+        if ch.bias_lat is not None and ch.bias_lon is not None and \
+                haversine_km(ch.bias_lat, ch.bias_lon, lat, lon) <= radius:
+            return True
+        if area is not None and haversine_km(area.lat, area.lon, lat, lon) <= radius:
+            return True
+    return any(sd.near(lat, lon) and on_subdivision(ch, sd) for sd in subs)
 
 
 def lines_for(ch: Channel, subs: list[Subdivision]) -> list[RailLine]:

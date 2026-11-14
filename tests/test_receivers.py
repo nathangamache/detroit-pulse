@@ -156,6 +156,32 @@ def test_line_names_match_across_datasets():
                                       coverage_lines=[RailLine("CN", "OTHERNAME", [])]), sd)  # other railroad
 
 
+def test_channel_hint_is_exact_and_coverage_needs_a_place():
+    """A hint names a channel's line only exactly (normalised), and a channel covers a point only
+    through a place on record: its bias point or area with a radius, or a nearby subdivision."""
+    from core.config_files import Area
+    from core.receivers import channel_covers_point, channel_matches_hint
+    ch = Channel(id="c", label="c", kind="rail_voice", railroad="CSX", subdivision="Test Sub",
+                 coverage_lines=[RailLine("CSX", "Test Sub", ["OTHERNAME (CSXT)"])])
+    assert channel_matches_hint(ch, "test") and channel_matches_hint(ch, "othername")
+    assert channel_matches_hint(ch, "Test Subdivision", railroad="csx")
+    assert not channel_matches_hint(ch, "est") and not channel_matches_hint(ch, "other")       # substrings
+    assert not channel_matches_hint(ch, "Test Sub", railroad="NS")
+    no_rr = Channel(id="n", label="n", kind="rail_voice", subdivision="Test Sub")
+    assert not channel_matches_hint(no_rr, "Test Sub", railroad="CSX")                       # unknown isn't CSX
+    sd = Subdivision(railroad="CSX", name="Test Sub", center=(42.25, -83.70), radius_km=8)
+    assert channel_covers_point(ch, 42.26, -83.71, [sd], []) and not channel_covers_point(ch, 42.9, -83.0, [sd], [])
+    assert not channel_covers_point(ch, 42.26, -83.71, [], [])                                # no place on record
+    biased = Channel(id="b", label="b", kind="rail_voice", bias_lat=42.9, bias_lon=-83.0, coverage_radius_km=10)
+    assert channel_covers_point(biased, 42.9, -83.0, [], []) and not channel_covers_point(biased, 42.26, -83.71, [], [])
+    bias_only = Channel(id="x", label="x", kind="rail_voice", bias_lat=42.9, bias_lon=-83.0)
+    assert not channel_covers_point(bias_only, 42.9, -83.0, [], [])                           # no radius: no reach
+    area = Area(id="a1", name="Test area", lat=42.9, lon=-83.0, radius_km=10)
+    in_area = Channel(id="a", label="a", kind="rail_voice", area_id="a1")
+    assert channel_covers_point(in_area, 42.9, -83.0, [], [area])
+    assert not channel_covers_point(in_area, 42.26, -83.71, [], [area])
+
+
 def test_coverage_object_from_config_and_derived(cfg_dir):
     (cfg_dir / "channels.local.yaml").write_text(yaml.safe_dump({"channels": [
         {"id": "road", "label": "road", "kind": "rail_voice", "railroad": "CSX", "subdivision": "Test Sub",
