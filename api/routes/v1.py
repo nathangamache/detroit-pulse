@@ -16,7 +16,7 @@ from sqlalchemy import text
 from core.config_files import (RAIL_KINDS, RAIL_VOICE_KINDS, Channel, haversine_km, load_areas, load_channels,
                                load_subdivisions, norm_line_name)
 from core.db import get_engine
-from core.receivers import (ReceiverView, channel_matches_hint, coverage_for, coverage_summary,
+from core.receivers import (RECEIVER_STATES, ReceiverView, channel_matches_hint, coverage_for, coverage_summary,
                             on_subdivision)
 from core.settings import get_settings
 
@@ -219,6 +219,50 @@ def _contract_kind(ch: Channel) -> str:
     return {"rail_dispatcher": "dispatcher", "rail_detector": "detector", "eot": "eot"}.get(ch.kind, "road")
 
 
+def _channels_n(n: int) -> str:
+    return f"{n} channel" + ("" if n == 1 else "s")
+
+
+def _voice_notes(chans: list[Channel], rstate: dict[str, dict], heard: bool) -> list[str]:
+    """`coverage.note` sentences for a line's enabled, non-example voice channels. Only a channel
+    whose receiver is `online` can be called quiet; when the line is only partly listened to, the
+    channels with no receiver (`not_installed`) or an `offline` one are counted as not covered."""
+    if not chans:
+        return ["No monitored rail voice channel for this location yet; add it to config/channels.local.yaml "
+                "and config/rail_channels.local.yaml once a receiver covers it."]
+    by_state = {s: [c for c in chans if rstate[c.id]["state"] == s] for s in RECEIVER_STATES}
+    on, off, missing = by_state["online"], by_state["offline"], by_state["not_installed"]
+    last_off = max((rstate[c.id].get("last_seen_at") or "" for c in off), default="")
+    if not off and not missing:
+        return [] if heard else ["The rail voice receiver is online and nothing was heard on these channels in the "
+                                 "window: they were quiet."]
+    if not on and not off:
+        return ["Rail voice channels for this line are configured, but no receiver has ever reported for them "
+                "(the SDR isn't installed or running yet): no transcripts here means no coverage, not a quiet line."]
+    if not on and not missing:
+        return [f"The rail voice receiver for this line is offline (last heard {last_off}): no transcripts here "
+                "means no coverage, not a quiet line."]
+    # a mix: say "quiet" of the online channels only, and name the gap
+    notes = []
+    if not on:
+        notes.append("No rail voice receiver for this line is online.")
+    elif not heard:
+        one = len(on) == 1
+        notes.append(f"The rail voice receiver is online for {len(on)} of {_channels_n(len(chans))} on this line "
+                     f"({', '.join(c.label for c in on)}) and nothing was heard on {'it' if one else 'them'} in the "
+                     f"window: {'that channel was' if one else 'those channels were'} quiet.")
+    gaps = []
+    if missing:
+        gaps.append(f"{_channels_n(len(missing))} with no receiver (none has ever reported for "
+                    f"{'it' if len(missing) == 1 else 'them'})")
+    if off:
+        gaps.append(f"{_channels_n(len(off))} whose receiver is offline (last heard {last_off})")
+    notes.append(f"Not covered: {' and '.join(gaps)}. No transcripts on "
+                 f"{'that channel' if len(missing) + len(off) == 1 else 'those channels'} means no coverage, "
+                 "not a quiet line.")
+    return notes
+
+
 @router.get("/rail/activity")
 def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Query(..., ge=-180, le=180),
                        since_minutes: int = Query(30), subdivision: str | None = None, railroad: str | None = None):
@@ -330,22 +374,7 @@ def rail_activity_near(lat: float = Query(..., ge=-90, le=90), lon: float = Quer
     coverage_channels = [{k: v for k, v in x.items() if v is not None} for x in coverage_channels]
     real_voice = [c for c in voice.values() if c.enabled and not c.is_example]
     real_eot = [c for c in eot_chans if not c.is_example]
-    notes = []
-    vstates = {rstate[c.id]["state"] for c in real_voice}
-    if not real_voice:
-        notes.append("No monitored rail voice channel for this location yet; add it to config/channels.local.yaml "
-                     "and config/rail_channels.local.yaml once a receiver covers it.")
-    elif "online" in vstates:
-        if not transcripts:
-            notes.append("The rail voice receiver is online and nothing was heard on these channels in the window: "
-                         "they were quiet.")
-    elif "offline" in vstates:
-        last = max(rstate[c.id].get("last_seen_at") or "" for c in real_voice)
-        notes.append(f"The rail voice receiver for this line is offline (last heard {last}): no transcripts here "
-                     "means no coverage, not a quiet line.")
-    else:
-        notes.append("Rail voice channels for this line are configured, but no receiver has ever reported for them "
-                     "(the SDR isn't installed or running yet): no transcripts here means no coverage, not a quiet line.")
+    notes = _voice_notes(real_voice, rstate, heard=bool(transcripts))
     estates = {rstate[c.id]["state"] for c in real_eot}
     if real_eot and "online" not in estates:
         notes.append("The EOT/HOT receiver is offline: an empty eot_hot list means no coverage." if "offline" in estates

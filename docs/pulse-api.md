@@ -60,7 +60,12 @@ close, else the latest per-transmission short summary.
    channel ..."), configured but no receiver ever reported (no transcripts means no
    coverage, not a quiet line), receiver offline (with the last time it was heard), or
    receiver online with nothing heard (the channels were quiet); the same for EOT/HOT, and
-   "EOT/HOT receiver location not configured" when the eot channel has no `bias`.
+   "EOT/HOT receiver location not configured" when the eot channel has no `bias`. Only a
+   channel whose `receiver_state` is `online` is ever called quiet: when a line is only
+   partly listened to (say 2 of 11 channels in rtl_airband's stats file), the note says the
+   receiver is "online for 2 of 11 channels on this line (<labels>)", that those were quiet
+   if nothing was heard, and "Not covered: 9 channels with no receiver ... and K channels
+   whose receiver is offline (last heard ...)". `covered` keeps its meaning above.
    Detector readouts also match the subdivision's aliases.
 4. `transcripts`: rail traffic on those channels, newest first, each with `reason_label`.
 5. `detector_readouts` from `rail_detector_events`; `defects` lists alarm types (`[]` = no
