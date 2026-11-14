@@ -1,0 +1,39 @@
+# Railroad channel plan: EMPTY EXAMPLE STRUCTURE.
+#
+# The real plan lives in config/rail_channels.local.yaml (gitignored), which replaces this
+# file when present. Build a starting point from FCC ULS public license data:
+#
+#   uv run python scripts/import_fcc_uls.py --uls-dir /path/to/l_LMpriv  (see docs/sdr-ingest.md)
+#
+# then move channels into the right subdivisions and set `use` and `verified` from your own
+# monitoring. Never copy RadioReference data here: its terms forbid AI/ML use.
+#
+# Schema:
+# railroads:
+#   <RAILROAD CODE: CSX | NS | CN | CSAO | AMTK | CPKC ...>:
+#     subdivisions:
+#       <Subdivision name>:
+#         bbox: {south: , west: , north: , east: }    # optional; or center + radius_km
+#         center: {lat: , lon: }
+#         radius_km: 15
+#         channels:
+#           - freq_mhz: 160.xxx          # 160.110-161.565 railroad pool (AAR channels 00-97)
+#             aar_channel: "07"          # (freq - 160.110) / 0.015
+#             use: road                  # road | dispatcher | yard | detector
+#             verified: false            # true only after you have heard it yourself
+#             source: "FCC ULS <call sign> <site>"   # provenance of the entry
+#             channel_id: example_rail_road           # optional link to config/channels.yaml
+
+railroads:
+  EXAMPLE_RR:
+    subdivisions:
+      Example Subdivision:
+        center: {lat: 42.3314, lon: -83.0458}
+        radius_km: 10
+        channels:
+          - freq_mhz: null
+            aar_channel: null
+            use: road
+            verified: false
+            source: placeholder
+            channel_id: example_rail_road
