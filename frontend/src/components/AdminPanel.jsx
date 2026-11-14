@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 
-const API = ''
+import { API, adminHeaders } from '../api'
 
 const Section = ({ title, children, accent = 'var(--green)' }) => (
   <div style={{ marginBottom: '20px' }}>
@@ -88,496 +88,175 @@ const StatusMsg = ({ msg, isError }) => msg ? (
 ) : null
 
 export default function AdminPanel({ onClose }) {
-  const [overview,      setOverview]      = useState(null)
-  const [incidents,     setIncidents]     = useState([])
-  const [units,         setUnits]         = useState({})
-  const [dbIncidents,   setDbIncidents]   = useState([])
-  const [unassociated,  setUnassociated]  = useState([])
-  const [loading,       setLoading]       = useState(false)
-  const [lastRefresh,   setLastRefresh]   = useState(null)
-  const [tab,           setTab]           = useState('overview')
-  const [statusMsg,     setStatusMsg]     = useState(null)
-  const [statusErr,     setStatusErr]     = useState(false)
+  // Admin is only reachable on the box itself (the gateway blocks /admin) and only when
+  // PULSE_ADMIN_TOKEN is set on the server. The token typed here is kept for this tab only.
+  const [token, setToken] = useState(() => { try { return sessionStorage.getItem('pulseAdminToken') || '' } catch { return '' } })
+  const [overview, setOverview] = useState(null)
+  const [usage, setUsage] = useState(null)
+  const [errors, setErrors] = useState([])
+  const [tab, setTab] = useState('overview')
+  const [statusMsg, setStatusMsg] = useState(null)
+  const [statusErr, setStatusErr] = useState(false)
+  const [mergeSrc, setMergeSrc] = useState('')
+  const [mergeTgt, setMergeTgt] = useState('')
+  const [incId, setIncId] = useState('')
 
-  // Merge state
-  const [mergeSource,   setMergeSource]   = useState('')
-  const [mergeTarget,   setMergeTarget]   = useState('')
-  const [merging,       setMerging]       = useState(false)
-
-  const showStatus = (msg, isError = false) => {
-    setStatusMsg(msg); setStatusErr(isError)
+  const showStatus = (msg, isErr = false) => {
+    setStatusMsg(msg); setStatusErr(isErr)
     setTimeout(() => setStatusMsg(null), 4000)
   }
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [ov, inc, un, dbi, una] = await Promise.all([
-        fetch(`${API}/admin/redis/overview`).then(r => r.json()),
-        fetch(`${API}/admin/redis/incidents`).then(r => r.json()),
-        fetch(`${API}/admin/redis/units`).then(r => r.json()),
-        fetch(`${API}/admin/db/incidents?limit=50`).then(r => r.json()),
-        fetch(`${API}/admin/db/unassociated?limit=50`).then(r => r.json()),
-      ])
-      setOverview(ov)
-      setIncidents(inc.incidents || [])
-      setUnits(un.units || {})
-      setDbIncidents(dbi.incidents || [])
-      setUnassociated(una.chunks || [])
-      setLastRefresh(new Date().toLocaleTimeString())
-    } catch (e) {
-      showStatus('Refresh failed', true)
+  const call = useCallback(async (method, path, body) => {
+    const res = await fetch(`${API}${path}`, {
+      method,
+      headers: { ...adminHeaders(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      const why = res.status === 404 ? 'admin disabled on the server (PULSE_ADMIN_TOKEN unset) or not found'
+        : res.status === 403 ? 'wrong admin token' : (data?.error?.message || `HTTP ${res.status}`)
+      throw new Error(why)
     }
-    setLoading(false)
+    return data
   }, [])
 
-  useEffect(() => { refresh() }, [refresh])
-
-  const del = async (url) => {
-    await fetch(`${API}${url}`, { method: 'DELETE' })
-    await refresh()
-  }
-
-  const reprocessChunk = async (chunkId) => {
-    showStatus(`Reprocessing ${chunkId.slice(0, 8)}...`)
+  const refresh = useCallback(async () => {
     try {
-      const res  = await fetch(`${API}/admin/reprocess/chunk/${chunkId}`,
-                               { method: 'POST' })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Failed')
-      showStatus(
-        `✓ ${data.correlation_action} — ${data.incident_id
-          ? data.incident_id.slice(0, 8)
-          : 'unassociated'} (${data.geocode_confidence || 'no geo'})`
-      )
-      await refresh()
-    } catch (e) {
-      showStatus(e.message, true)
-    }
+      const [ov, us, er] = await Promise.all([
+        call('GET', '/admin/overview'), call('GET', '/admin/llm/usage?days=30'),
+        call('GET', '/admin/transmissions/errors?limit=50'),
+      ])
+      setOverview(ov); setUsage(us); setErrors(er)
+    } catch (e) { showStatus(e.message, true) }
+  }, [call])
+
+  useEffect(() => {
+    const t = setTimeout(() => { if (token) refresh() }, 0)
+    return () => clearTimeout(t)
+  }, [token, refresh])
+
+  const saveToken = (v) => {
+    setToken(v)
+    try { sessionStorage.setItem('pulseAdminToken', v) } catch { /* storage blocked */ }
   }
 
-  const mergeIncidents = async () => {
-    if (!mergeSource || !mergeTarget) {
-      showStatus('Enter both source and target IDs', true); return
-    }
-    setMerging(true)
-    try {
-      const res  = await fetch(`${API}/admin/merge/incidents`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ source_id: mergeSource, target_id: mergeTarget }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Failed')
-      showStatus(
-        `Merged — ${data.chunks_relinked} chunks relinked, ` +
-        `${data.units_reassigned.length} units reassigned`
-      )
-      setMergeSource(''); setMergeTarget('')
-      await refresh()
-    } catch (e) {
-      showStatus(e.message, true)
-    }
-    setMerging(false)
+  const act = async (fn, ok) => {
+    try { await fn(); showStatus(ok); refresh() } catch (e) { showStatus(e.message, true) }
   }
 
-  const tabs = ['overview', 'redis incidents', 'units',
-                'db incidents', 'unassociated', 'merge', 'queues']
-
+  const llm = overview?.llm
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <span style={styles.title}>// REDIS ADMIN</span>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {lastRefresh && (
-            <span style={{ fontFamily: 'var(--mono)', fontSize: '9px',
-                           color: 'var(--text-dim)' }}>
-              {lastRefresh}
-            </span>
-          )}
-          <Btn onClick={refresh} disabled={loading}>
-            {loading ? 'LOADING...' : '↻ REFRESH'}
-          </Btn>
-          <DangerBtn onClick={() => del('/admin/reset/all')}>
-            ☢ RESET ALL
-          </DangerBtn>
-          {onClose && (
-            <button onClick={onClose} style={{
-              fontFamily: 'var(--mono)', fontSize: '10px',
-              color: 'var(--text-dim)', background: 'transparent',
-              border: '1px solid var(--border)', borderRadius: '2px',
-              padding: '3px 10px', cursor: 'pointer', letterSpacing: '1px',
-            }}>✕ CLOSE</button>
-          )}
-        </div>
+        <span style={styles.title}>ADMIN</span>
+        <Btn onClick={refresh} small>REFRESH</Btn>
+        <Btn onClick={onClose} small color="var(--text-dim)">CLOSE</Btn>
       </div>
-
-      {statusMsg && (
-        <div style={{
-          padding:    '6px 14px',
-          fontFamily: 'var(--mono)',
-          fontSize:   '10px',
-          color:      statusErr ? 'var(--red)' : 'var(--green)',
-          background: statusErr
-            ? 'rgba(255,77,106,0.08)'
-            : 'rgba(0,229,160,0.08)',
-          borderBottom: '1px solid var(--border)',
-        }}>
-          {statusErr ? '✗ ' : '✓ '}{statusMsg}
-        </div>
-      )}
-
       <div style={styles.tabs}>
-        {tabs.map(t => (
-          <button key={t} onClick={() => setTab(t)} style={{
-            ...styles.tab,
-            color:        tab === t ? 'var(--green)' : 'var(--text-dim)',
-            borderBottom: tab === t
-              ? '2px solid var(--green)'
-              : '2px solid transparent',
-          }}>
-            {t.toUpperCase()}
-            {t === 'unassociated' && unassociated.length > 0 && (
-              <span style={styles.badge}>{unassociated.length}</span>
-            )}
-          </button>
+        {['overview', 'cost', 'errors', 'actions'].map(t => (
+          <button key={t} style={{ ...styles.tab, ...(tab === t ? { color: 'var(--green)' } : {}) }}
+                  onClick={() => setTab(t)}>{t.toUpperCase()}</button>
         ))}
       </div>
-
       <div style={styles.body}>
+        <Section title="Admin token">
+          <input type="password" value={token} placeholder="X-Pulse-Admin-Token"
+                 onChange={e => saveToken(e.target.value)} style={styles.mergeInput} />
+        </Section>
+        <StatusMsg msg={statusMsg} isError={statusErr} />
 
-        {/* ── Overview ── */}
         {tab === 'overview' && overview && (
-          <div>
-            <Section title="Memory & Connections">
-              <StatRow label="Used memory"       value={overview.used_memory_human} />
-              <StatRow label="Connected clients" value={overview.connected_clients} />
+          <>
+            <Section title="Queue">
+              {Object.entries(overview.queue || {}).map(([k, v]) => <StatRow key={k} label={k} value={v} />)}
             </Section>
-            <Section title="Queues" accent="var(--amber)">
-              <StatRow label="Transcription"  value={overview.queues?.transcription} accent="var(--amber)" />
-              <StatRow label="Normalization"  value={overview.queues?.normalization}  accent="var(--amber)" />
-              <StatRow label="Unassociated"   value={overview.queues?.unassociated}   accent="var(--red)" />
+            <Section title="Incidents">
+              {Object.entries(overview.incidents || {}).map(([k, v]) => <StatRow key={k} label={k} value={v} />)}
             </Section>
-            <Section title="State" accent="var(--blue)">
-              <StatRow label="Active units"     value={overview.active_units}     accent="var(--blue)" />
-              <StatRow label="Active incidents" value={overview.active_incidents} accent="var(--blue)" />
-              <StatRow label="Geocache entries" value={overview.geocache_entries} />
-              <StatRow label="Debug history"    value={overview.debug_history} />
+            <Section title="Extraction source (24h)">
+              {Object.entries(overview.extract_sources_24h || {}).map(([k, v]) => <StatRow key={k} label={k} value={v} />)}
             </Section>
-            <Section title="Quick Actions" accent="var(--red)">
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <DangerBtn onClick={() => del('/admin/redis/incidents')}>CLEAR REDIS INCIDENTS</DangerBtn>
-                <DangerBtn onClick={() => del('/admin/redis/units')}>CLEAR UNITS</DangerBtn>
-                <DangerBtn onClick={() => del('/admin/redis/queues/transcription')}>FLUSH TRANSCRIPTION Q</DangerBtn>
-                <DangerBtn onClick={() => del('/admin/redis/queues/normalization')}>FLUSH NORMALIZATION Q</DangerBtn>
-                <DangerBtn onClick={() => del('/admin/redis/debug')}>CLEAR DEBUG HISTORY</DangerBtn>
-                <DangerBtn onClick={() => del('/admin/db/incidents')}>WIPE DB INCIDENTS</DangerBtn>
-              </div>
-            </Section>
-          </div>
-        )}
-
-        {/* ── Redis Incidents ── */}
-        {tab === 'redis incidents' && (
-          <div>
-            <div style={styles.listHeader}>
-              <span style={styles.listCount}>{incidents.length} active in Redis</span>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <DangerBtn onClick={() => del('/admin/redis/incidents')}>CLEAR ALL</DangerBtn>
-              </div>
-            </div>
-            {incidents.length === 0 && <Empty text="No active incidents in Redis" />}
-            {incidents.map(inc => (
-              <IncidentRow
-                key={inc.incident_id}
-                incident={inc}
-                onDelete={() => del(`/admin/redis/incidents/${inc.incident_id}`)}
-                onCopyId={() => {
-                  navigator.clipboard.writeText(inc.incident_id)
-                  showStatus(`Copied ${inc.incident_id.slice(0, 8)}...`)
-                }}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* ── Units ── */}
-        {tab === 'units' && (
-          <div>
-            <div style={styles.listHeader}>
-              <span style={styles.listCount}>{Object.keys(units).length} active units</span>
-              <DangerBtn onClick={() => del('/admin/redis/units')}>CLEAR ALL</DangerBtn>
-            </div>
-            {Object.keys(units).length === 0 && <Empty text="No active unit assignments" />}
-            {Object.entries(units).map(([unit, incidentId]) => (
-              <div key={unit} style={styles.unitRow}>
-                <div>
-                  <span style={styles.unitId}>{unit}</span>
-                  <span style={styles.unitInc}>→ {incidentId.slice(0, 8)}...</span>
+            <Section title="Recent pipeline events" accent="var(--amber)">
+              {(overview.recent_events || []).length === 0 && <Empty text="none" />}
+              {(overview.recent_events || []).map((e, i) => (
+                <div key={i} style={styles.chunkRow}>
+                  <div style={styles.chunkRowTop}><span style={styles.chunkFeed}>{e.kind}</span>
+                    <span style={styles.chunkTime}>{e.ts}</span></div>
+                  <div style={styles.chunkTranscript}>{JSON.stringify(e.detail)}</div>
                 </div>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <Btn small color="var(--text-dim)"
-                       onClick={() => {
-                         navigator.clipboard.writeText(incidentId)
-                         showStatus(`Copied ${incidentId.slice(0, 8)}...`)
-                       }}>
-                    COPY ID
-                  </Btn>
-                  <DangerBtn small onClick={() => del(`/admin/redis/units/${unit}`)}>
-                    RELEASE
-                  </DangerBtn>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </Section>
+          </>
         )}
 
-        {/* ── DB Incidents ── */}
-        {tab === 'db incidents' && (
-          <div>
-            <div style={styles.listHeader}>
-              <span style={styles.listCount}>{dbIncidents.length} in database</span>
-              <DangerBtn onClick={() => del('/admin/db/incidents')}>WIPE ALL</DangerBtn>
-            </div>
-            {dbIncidents.length === 0 && <Empty text="No incidents in database" />}
-            {dbIncidents.map(inc => (
-              <DbIncidentRow
-                key={inc.incident_id}
-                incident={inc}
-                onDelete={() => del(`/admin/db/incidents/${inc.incident_id}`)}
-                onCopyId={() => {
-                  navigator.clipboard.writeText(String(inc.incident_id))
-                  showStatus(`Copied ${String(inc.incident_id).slice(0, 8)}...`)
-                }}
-                onSetMergeSource={() => {
-                  setMergeSource(String(inc.incident_id))
-                  setTab('merge')
-                  showStatus(`Source set to ${String(inc.incident_id).slice(0, 8)}...`)
-                }}
-                onSetMergeTarget={() => {
-                  setMergeTarget(String(inc.incident_id))
-                  setTab('merge')
-                  showStatus(`Target set to ${String(inc.incident_id).slice(0, 8)}...`)
-                }}
-              />
-            ))}
-          </div>
+        {tab === 'cost' && llm && (
+          <>
+            <Section title="Claude spend (UTC)">
+              <StatRow label="today" value={`$${llm.spent_today_usd.toFixed(4)} / $${llm.daily_cap_usd}`} />
+              <StatRow label="this month" value={`$${llm.spent_month_usd.toFixed(4)} / $${llm.monthly_cap_usd}`} />
+              <StatRow label="degraded to rules" value={llm.degraded || 'no'}
+                       accent={llm.degraded ? 'var(--red)' : undefined} />
+              <StatRow label="price table" value={llm.price_version} />
+            </Section>
+            <Section title="Daily usage">
+              {(usage?.daily || []).length === 0 && <Empty text="no calls yet" />}
+              {(usage?.daily || []).map((d, i) => (
+                <StatRow key={i} label={`${String(d.day).slice(0, 10)} ${d.workload}`}
+                         value={`${d.calls} calls · ${d.items} items · $${Number(d.cost_usd).toFixed(4)}`} />
+              ))}
+            </Section>
+          </>
         )}
 
-        {/* ── Unassociated chunks ── */}
-        {tab === 'unassociated' && (
-          <div>
-            <div style={styles.listHeader}>
-              <span style={styles.listCount}>
-                {unassociated.length} unassociated chunks
-              </span>
-              <Btn onClick={refresh} small>REFRESH</Btn>
-            </div>
-            {unassociated.length === 0 && (
-              <Empty text="No unassociated chunks — great!" />
-            )}
-            {unassociated.map((chunk, i) => (
-              <div key={chunk.chunk_id || i} style={styles.chunkRow}>
+        {tab === 'errors' && (
+          <Section title="Failed transmissions" accent="var(--red)">
+            {errors.length === 0 && <Empty text="no errors" />}
+            {errors.map(e => (
+              <div key={e.chunk_id} style={styles.chunkRow}>
                 <div style={styles.chunkRowTop}>
-                  <span style={styles.chunkFeed}>{chunk.feed_id}</span>
-                  <span style={styles.chunkTime}>
-                    {chunk.timestamp
-                      ? new Date(chunk.timestamp * 1000).toLocaleTimeString()
-                      : '—'}
-                  </span>
+                  <span style={styles.chunkFeed}>{e.channel_id}</span>
+                  <span style={styles.chunkTime}>{e.captured_at}</span>
                 </div>
-                <div style={styles.chunkTranscript}>
-                  &ldquo;{(chunk.transcript || chunk.raw_transcript || '').slice(0, 150)}&rdquo;
-                </div>
-                {chunk.chunk_id && (
-                  <div style={styles.chunkId}>{chunk.chunk_id}</div>
-                )}
-                <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                  {chunk.chunk_id && (
-                    <Btn small color="var(--blue)"
-                         onClick={() => reprocessChunk(chunk.chunk_id)}>
-                      ↻ REPROCESS
-                    </Btn>
-                  )}
-                </div>
+                <div style={styles.chunkTranscript}>{e.error}</div>
+                <Btn small onClick={() => act(() => call('POST', `/admin/transmissions/${e.chunk_id}/requeue?stage=transcribe`), 'requeued')}>REQUEUE</Btn>
               </div>
             ))}
-          </div>
+          </Section>
         )}
 
-        {/* ── Merge incidents ── */}
-        {tab === 'merge' && (
-          <div>
-            <Section title="Merge Incidents">
-              <div style={styles.mergeDesc}>
-                Merges SOURCE into TARGET. All transcript chunks from the
-                source are re-linked to the target. Source is deleted from
-                DB and Redis. Units are combined. Target incident is
-                broadcast to the live map.
-              </div>
-
-              <div style={styles.mergeField}>
-                <label style={styles.mergeLabel}>SOURCE incident ID (will be deleted)</label>
-                <input
-                  style={styles.mergeInput}
-                  placeholder="source incident UUID"
-                  value={mergeSource}
-                  onChange={e => setMergeSource(e.target.value)}
-                />
-              </div>
-
-              <div style={styles.mergeField}>
-                <label style={styles.mergeLabel}>TARGET incident ID (kept, receives chunks)</label>
-                <input
-                  style={styles.mergeInput}
-                  placeholder="target incident UUID"
-                  value={mergeTarget}
-                  onChange={e => setMergeTarget(e.target.value)}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                <DangerBtn
-                  onClick={mergeIncidents}
-                  disabled={merging || !mergeSource || !mergeTarget}
-                >
-                  {merging ? 'MERGING...' : '⇢ MERGE INCIDENTS'}
-                </DangerBtn>
-                <Btn color="var(--text-dim)"
-                     onClick={() => { setMergeSource(''); setMergeTarget('') }}>
-                  CLEAR
-                </Btn>
+        {tab === 'actions' && (
+          <>
+            <Section title="Incident">
+              <input value={incId} placeholder="incident id" onChange={e => setIncId(e.target.value.trim())}
+                     style={styles.mergeInput} />
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                <Btn disabled={!incId} onClick={() => act(() => call('POST', `/admin/incidents/${incId}/resolve`), 'resolved')}>RESOLVE</Btn>
+                <DangerBtn disabled={!incId} onClick={() => act(() => call('DELETE', `/admin/incidents/${incId}`), 'deleted')}>DELETE</DangerBtn>
               </div>
             </Section>
-
-            <Section title="Reprocess a chunk by ID" accent="var(--blue)">
-              <ReprocessById onReprocess={reprocessChunk} showStatus={showStatus} />
+            <Section title="Merge incidents">
+              <div style={styles.mergeDesc}>Moves every transmission of the source into the target, then deletes the source.</div>
+              <div style={styles.mergeField}><div style={styles.mergeLabel}>SOURCE</div>
+                <input value={mergeSrc} onChange={e => setMergeSrc(e.target.value.trim())} style={styles.mergeInput} /></div>
+              <div style={styles.mergeField}><div style={styles.mergeLabel}>TARGET</div>
+                <input value={mergeTgt} onChange={e => setMergeTgt(e.target.value.trim())} style={styles.mergeInput} /></div>
+              <Btn disabled={!mergeSrc || !mergeTgt}
+                   onClick={() => act(() => call('POST', '/admin/incidents/merge', { source_id: mergeSrc, target_id: mergeTgt }), 'merged')}>MERGE</Btn>
             </Section>
-
-            <Section title="Quick tip" accent="var(--text-dim)">
-              <div style={styles.mergeDesc}>
-                To merge: go to DB INCIDENTS tab, click COPY ID on the
-                incident you want to remove (source), then COPY ID on
-                the incident you want to keep (target), paste both here.
-                Or use the SET AS SOURCE / SET AS TARGET buttons on each
-                incident row to populate automatically.
-              </div>
+            <Section title="Danger zone" accent="var(--red)">
+              <div style={styles.mergeDesc}>Wipes live incidents, transmissions and rail data. The LLM cost ledger is kept.</div>
+              <DangerBtn onClick={() => act(() => call('DELETE', '/admin/reset/all?confirm=RESET-LIVE-DATA'), 'reset done')}>RESET LIVE DATA</DangerBtn>
             </Section>
-          </div>
+          </>
         )}
-
-        {/* ── Queues ── */}
-        {tab === 'queues' && (
-          <div>
-            {['transcription', 'normalization', 'unassociated'].map(q => (
-              <Section key={q} title={`${q} queue`} accent="var(--amber)">
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <DangerBtn onClick={() => del(`/admin/redis/queues/${q}`)}>
-                    FLUSH
-                  </DangerBtn>
-                </div>
-              </Section>
-            ))}
-          </div>
-        )}
-
       </div>
-    </div>
-  )
-}
-
-function ReprocessById({ onReprocess, showStatus }) {
-  const [chunkId, setChunkId] = useState('')
-  return (
-    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-      <input
-        style={{ ...styles.mergeInput, flex: 1 }}
-        placeholder="chunk UUID"
-        value={chunkId}
-        onChange={e => setChunkId(e.target.value)}
-      />
-      <Btn color="var(--blue)"
-           disabled={!chunkId}
-           onClick={() => { onReprocess(chunkId); setChunkId('') }}>
-        ↻ REPROCESS
-      </Btn>
-    </div>
-  )
-}
-
-function IncidentRow({ incident, onDelete, onCopyId }) {
-  return (
-    <div style={styles.incRow}>
-      <div style={styles.incTop}>
-        <span style={styles.incType}>{incident.incident_type}</span>
-        <span style={styles.incStatus}>{incident.status}</span>
-        <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
-          <Btn small color="var(--text-dim)" onClick={onCopyId}>COPY ID</Btn>
-          <DangerBtn small onClick={onDelete}>DELETE</DangerBtn>
-        </div>
-      </div>
-      <div style={styles.incAddr}>{incident.address_full || 'No address'}</div>
-      <div style={styles.incMeta}>
-        <span>{incident.incident_id?.slice(0, 8)}...</span>
-        <span>{incident.county}</span>
-        <span>{(incident.units || []).join(', ') || 'no units'}</span>
-      </div>
-    </div>
-  )
-}
-
-function DbIncidentRow({ incident, onDelete, onCopyId,
-                         onSetMergeSource, onSetMergeTarget }) {
-  const [expanded, setExpanded] = useState(false)
-  return (
-    <div style={styles.incRow}>
-      <div style={styles.incTop}>
-        <span style={styles.incType}>{incident.incident_type}</span>
-        <span style={{
-          ...styles.incStatus,
-          color: incident.status === 'ACTIVE'
-            ? 'var(--green)' : 'var(--text-dim)',
-        }}>
-          {incident.status}
-        </span>
-        <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto',
-                      flexWrap: 'wrap' }}>
-          <Btn small color="var(--text-dim)"
-               onClick={() => setExpanded(e => !e)}>
-            {expanded ? 'HIDE' : 'EXPAND'}
-          </Btn>
-          <Btn small color="var(--text-dim)" onClick={onCopyId}>COPY ID</Btn>
-          <Btn small color="var(--amber)" onClick={onSetMergeSource}>SRC</Btn>
-          <Btn small color="var(--blue)"  onClick={onSetMergeTarget}>TGT</Btn>
-          <DangerBtn small onClick={onDelete}>DELETE</DangerBtn>
-        </div>
-      </div>
-      <div style={styles.incAddr}>{incident.address_full || 'No address'}</div>
-      <div style={styles.incMeta}>
-        <span>{String(incident.incident_id).slice(0, 8)}...</span>
-        <span>{incident.county}</span>
-        <span>{String(incident.opened_at || '').slice(11, 19)}</span>
-      </div>
-      {expanded && (
-        <div style={styles.incExpanded}>
-          <div style={styles.incExpandedId}>{incident.incident_id}</div>
-          {incident.summary && (
-            <div style={styles.incExpandedSummary}>{incident.summary}</div>
-          )}
-        </div>
-      )}
     </div>
   )
 }
 
 function Empty({ text }) {
-  return (
-    <div style={{ padding: '20px', textAlign: 'center',
-                  fontFamily: 'var(--mono)', fontSize: '11px',
-                  color: 'var(--text-dim)' }}>
-      {text}
-    </div>
-  )
+  return <div style={{ fontFamily: 'var(--mono)', fontSize: '10px', color: 'var(--text-faint)', padding: '6px 0' }}>{text}</div>
 }
 
 const styles = {

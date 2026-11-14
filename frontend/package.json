@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "detroit-pulse-ui",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,11 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "hls.js": "^1.6.15",
-    "mapbox-gl": "^3.20.0",
+    "maplibre-gl": "^6.18.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "socket.io-client": "^4.8.3"
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

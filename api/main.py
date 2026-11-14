@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -20,8 +19,7 @@ import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api.routes.admin import router as admin_router
@@ -35,7 +33,6 @@ from core.logging import setup_logging
 from core.settings import get_settings
 
 log = structlog.get_logger()
-FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 _CODES = {400: "bad_request", 401: "unauthorized", 403: "forbidden", 404: "not_found", 422: "bad_request",
           503: "unavailable"}
 
@@ -114,14 +111,8 @@ def create_app() -> FastAPI:
     def health():
         return {"status": "ok", "service": "detroit-pulse"}
 
-    if os.path.exists(os.path.join(FRONTEND_DIST, "index.html")):
-        assets = os.path.join(FRONTEND_DIST, "assets")
-        if os.path.isdir(assets):
-            app.mount("/assets", StaticFiles(directory=assets), name="assets")
-
-        @app.get("/", include_in_schema=False)
-        def index():
-            return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+    # The UI (frontend/dist, built with base /pulse/) is served by the gateway (PULSE_STATIC_DIR);
+    # for local work use `npm run dev`, which proxies /pulse/api to this server.
     return app
 
 

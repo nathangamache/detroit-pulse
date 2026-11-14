@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
-// Dynamically build WebSocket URL from current page location
-// Works on localhost, internal IP, or any domain in front
-const getWsUrl = () => {
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  const host     = window.location.host
-  return `${protocol}://${host}/ws`
-}
+import { wsUrl } from '../api'
+
+// WebSocket at <base>/api/ws (e.g. /pulse/api/ws behind the gateway). If it can't connect,
+// App.jsx falls back to polling the REST API, so the UI keeps working without WebSockets.
+const getWsUrl = wsUrl
 
 const PING_INTERVAL   = 25000
 const RECONNECT_DELAY = 3000

@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap');
+/* No external font requests (the gateway's CSP and privacy): system fonts first. */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -63,8 +63,8 @@
   --hazmat-border: rgba(245, 158, 11, 0.25);
 
   /* ── Typography ── */
-  --font:    'Barlow', -apple-system, sans-serif;
-  --mono:    'DM Mono', 'Fira Code', monospace;
+  --font:    'Barlow', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono:    'DM Mono', 'Fira Code', ui-monospace, 'DejaVu Sans Mono', monospace;
   --cond:    'Barlow Condensed', 'Barlow', sans-serif;
 
   /* ── Layout ── */

@@ -1,16 +1,19 @@
-import { useEffect, useRef, useCallback } from 'react'
-import mapboxgl from 'mapbox-gl'
-import 'mapbox-gl/dist/mapbox-gl.css'
+import { useEffect, useRef } from 'react'
+import * as maplibregl from 'maplibre-gl'
+import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
+import 'maplibre-gl/dist/maplibre-gl.css'
+import { API, MAP_STYLE } from '../api'
+
+// MapLibre 6 ships its worker as a separate ES module; Vite bundles it and gives us its URL.
+maplibregl.setWorkerUrl(workerUrl)
 import { INCIDENT_COLORS, INCIDENT_LABELS } from '../utils/incidents'
 
-mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || ''
-
-const DETROIT_CENTER = [-83.05, 42.38]
-const DEFAULT_ZOOM   = 10
+const DETROIT_CENTER = [-83.40, 42.40]   // Wayne + Oakland + Washtenaw
+const DEFAULT_ZOOM   = 9
 const SOURCE_ID    = 'incidents'
 const CIRCLE_LAYER = 'incidents-circles'
 const LABEL_LAYER  = 'incidents-labels'
-const API = ''
+const LABEL_FONT = ['Noto Sans Bold']   // glyphs served by OpenFreeMap
 
 // External overlay source/layer IDs
 const EXT_SOURCES = {
@@ -98,17 +101,16 @@ export default function Map({ incidents, selectedId, onSelectIncident, layers = 
   // Init map once
   useEffect(() => {
     if (mapRef.current) return
-    if (!mapboxgl.accessToken) return
 
-    const map = new mapboxgl.Map({
+    const map = new maplibregl.Map({
       container: containerRef.current,
-      style:     'mapbox://styles/mapbox/dark-v11',
+      style:     MAP_STYLE,
       center:    DETROIT_CENTER,
       zoom:      DEFAULT_ZOOM,
     })
 
     mapRef.current = map
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    map.addControl(new maplibregl.NavigationControl(), 'top-right')
 
     map.on('load', () => {
       // ── GeoJSON source ──────────────────────────────────────────
@@ -165,7 +167,7 @@ export default function Map({ incidents, selectedId, onSelectIncident, layers = 
       readyRef.current = true
     })
 
-    map.on('error', e => console.error('Mapbox error:', e))
+    map.on('error', e => console.error('Map error:', e))
 
     return () => {
       readyRef.current = false
@@ -199,7 +201,7 @@ export default function Map({ incidents, selectedId, onSelectIncident, layers = 
       },
       {
         id:       'ext-dte-outages',
-        endpoint: 'https://outagemap.serv.dteenergy.com/GISRest/services/OMP/OutageLocations/MapServer/2/query?where=1%3D1&outFields=*&f=geojson&resultRecordCount=500&geometry=-84.1%2C42.0%2C-82.5%2C43.1&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects',
+        endpoint: `${API}/external/dte-outages`,   // fetched server-side (the DTE host has no CORS)
         visible:  layers.dteOutages,
         type:     'fill',
         paint: {
@@ -286,7 +288,7 @@ export default function Map({ incidents, selectedId, onSelectIncident, layers = 
               'text-field':         ['get', labelField],
               'text-size':          labelSize,
               'text-allow-overlap': false,
-              'text-font':          ['DIN Offc Pro Medium', 'Arial Unicode MS Bold'],
+              'text-font':          LABEL_FONT,
             },
             paint: { 'text-color': color, 'text-opacity': 0.9 },
           })
@@ -343,7 +345,7 @@ export default function Map({ incidents, selectedId, onSelectIncident, layers = 
             const props = e.features[0].properties
             const name  = props.name || props.description || props.type || id
             const ll    = e.features[0].geometry.coordinates
-            new mapboxgl.Popup({ closeButton: true, maxWidth: '300px' })
+            new maplibregl.Popup({ closeButton: true, maxWidth: '300px' })
               .setLngLat(ll)
               .setHTML(`<div style="font-family:monospace;font-size:11px;color:#e0e0e0;background:#1a2420;padding:8px;border-radius:4px">
                 <div style="color:#00e5a0;font-weight:bold;margin-bottom:6px">${name}</div>
@@ -427,28 +429,9 @@ export default function Map({ incidents, selectedId, onSelectIncident, layers = 
     return () => map.off('click', CIRCLE_LAYER, handler)
   }, [onSelectIncident])
 
-  if (!mapboxgl.accessToken) {
-    return (
-      <div style={styles.noToken}>
-        <div style={styles.noTokenText}>VITE_MAPBOX_TOKEN not set</div>
-        <div style={styles.noTokenSub}>Add token to frontend/.env and restart Vite</div>
-      </div>
-    )
-  }
-
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
   )
-}
-
-const styles = {
-  noToken: {
-    width: '100%', height: '100%',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    background: '#080c10', flexDirection: 'column', gap: '12px',
-  },
-  noTokenText: { fontFamily: 'monospace', color: '#ff4d6a', fontSize: '13px' },
-  noTokenSub:  { fontFamily: 'monospace', color: '#5a7060', fontSize: '11px' },
 }
 
 // ── Layer Controls ────────────────────────────────────────────────────────

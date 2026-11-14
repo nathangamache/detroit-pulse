@@ -2,19 +2,23 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Map, { LayerControls } from './components/Map'
 import IncidentFeed   from './components/IncidentFeed'
 import IncidentDetail from './components/IncidentDetail'
-import AudioPlayer    from './components/AudioPlayer'
+import ChannelPanel   from './components/ChannelPanel'
 import Header         from './components/Header'
 import DebugPanel     from './components/DebugPanel'
 import AdminPanel     from './components/AdminPanel'
 import { useWebSocket } from './hooks/useWebSocket'
+import { API } from './api'
 
-const API = ''
+const POLL_MS = 20000   // REST polling when the WebSocket is down
 const MAX_DEBUG_EVENTS = 200
+
+function fetchActive() {
+  return fetch(`${API}/incidents/active`).then(r => (r.ok ? r.json() : [])).catch(() => [])
+}
 
 export default function App() {
   const [incidents,   setIncidents]  = useState([])
   const [selectedId,  setSelectedId] = useState(null)
-  const [feeds,       setFeeds]      = useState([])
   const [debugEvents, setDebugEvents]= useState([])
 
   const [showDebug,  setShowDebug]  = useState(false)
@@ -24,23 +28,18 @@ export default function App() {
     fireStations: false,
     battalions:   false,
     precincts:    false,
-    crimes:       false,
     dteOutages:   false,
     counties:     false,
   })
 
   const seenTs = useRef(new Set())
+  const loadIncidents = useCallback(() => {
+    fetchActive().then(data => { if (Array.isArray(data)) setIncidents(data) })
+  }, [])
 
   useEffect(() => {
-    fetch(`${API}/incidents/active`)
-      .then(r => r.json())
-      .then(data => setIncidents(data))
-      .catch(() => {})
-    fetch(`${API}/audio/feeds`)
-      .then(r => r.json())
-      .then(data => setFeeds(data))
-      .catch(() => {})
-  }, [])
+    loadIncidents()
+  }, [loadIncidents])
 
   const addDebugEvent = useCallback((event, data, ts) => {
     const key = data?.event_uuid ? data.event_uuid : `${event}:${ts}`
@@ -78,6 +77,9 @@ export default function App() {
           i.incident_id === data.incident_id ? { ...i, ...data } : i
         ))
         break
+      case 'incident:delete':
+        setIncidents(prev => prev.filter(i => i.incident_id !== data.incident_id))
+        break
       default:
         break
     }
@@ -86,6 +88,13 @@ export default function App() {
   const [filterType, setFilterType] = useState('ALL')
 
   const connected        = useWebSocket(handleWsEvent)
+
+  // Fallback: if the WebSocket isn't connected (e.g. a proxy without upgrade support), poll.
+  useEffect(() => {
+    if (connected) return
+    const t = setInterval(loadIncidents, POLL_MS)
+    return () => clearInterval(t)
+  }, [connected, loadIncidents])
   const selectedIncident = incidents.find(i => i.incident_id === selectedId) || null
   const activeCount      = incidents.filter(i => i.status === 'ACTIVE').length
 
@@ -129,10 +138,10 @@ export default function App() {
       />
 
       <div style={styles.body}>
-        {/* ── Left panel: audio + feed ── */}
+        {/* ── Left panel: channels + feed ── */}
         <div style={styles.leftPanel}>
           <div style={{ flexShrink: 0 }}>
-            <AudioPlayer feeds={feeds} />
+            <ChannelPanel />
           </div>
           <IncidentFeed
             incidents={incidents}

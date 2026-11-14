@@ -24,7 +24,7 @@ const FEED_SHORT = {
 
 function shortFeed(id) {
   if (!id) return ''
-  return FEED_SHORT[id] || id.replace(/^wayneco_/, '').replace(/_/g, ' ')
+  return FEED_SHORT[id] || id.replace(/_/g, ' ')
 }
 
 function feedColor(id) {
@@ -86,7 +86,7 @@ function parseEvent(raw) {
   if (eventType === 'pipeline:debug' || eventType === 'debug:pipeline') {
     const d       = raw.data || {}
     const stage   = d.stage || 'unknown'
-    const feed_id = d.feed_id || raw.feed_id || ''
+    const feed_id = d.channel_id || d.feed_id || raw.feed_id || ''
     const cfg     = STAGE_CONFIG[stage] || { label: stage.toUpperCase(), color: '#475569' }
 
     // Build a human-readable summary and detail fields per stage
@@ -162,7 +162,7 @@ function parseEvent(raw) {
 
   // ── 2. debug:normalization (single-event summary from pipeline_worker_v3) ──
   if (eventType === 'debug:normalization' || eventType.includes(':normalization')) {
-    const feed_id  = raw.feed_id || raw.data?.feed_id || ''
+    const feed_id  = raw.feed_id || raw.data?.channel_id || raw.data?.feed_id || ''
     const inner    = raw.data?.data || raw.data || {}
     const structured = inner.structured || {}
 
@@ -214,7 +214,7 @@ function parseEvent(raw) {
       kind,
       stage:      'incident',
       cfg,
-      feed_id:    d.feed_id || '',
+      feed_id:    d.channel_id || d.feed_id || '',
       feed_short: shortFeed(d.feed_id),
       ts,
       summary,

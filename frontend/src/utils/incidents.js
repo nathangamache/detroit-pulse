@@ -25,6 +25,15 @@ export const INCIDENT_LABELS = {
   RECOVERY_AUTO:       'Auto Recovery',
   ANIMAL_CONTROL:      'Animal Control',
   PRISONER:            'Prisoner',
+  STABBING:            'Stabbing',
+  OTHER_FIRE:          'Brush / Other Fire',
+  FIRE_ALARM:          'Fire Alarm',
+  GAS_LEAK:            'Gas Leak',
+  WATER_RESCUE:        'Water Rescue',
+  DISTURBANCE:         'Disturbance',
+  TRAFFIC_HAZARD:      'Traffic Hazard',
+  RAIL_OPERATIONS:     'Rail Operations',
+  RAIL_INCIDENT:       'Rail Incident',
   OTHER:               'Other',
   UNKNOWN:             'Unknown',
 }
@@ -38,6 +47,16 @@ export const PRIORITY_COLORS = {
 
 
 export const INCIDENT_COLORS = {
+  // ── Added with the SDR rework ─────────────────────────────────────
+  STABBING:            '#ff1744',
+  OTHER_FIRE:          '#ff9100',
+  FIRE_ALARM:          '#ffab40',
+  GAS_LEAK:            '#c6ff00',
+  WATER_RESCUE:        '#00b0ff',
+  DISTURBANCE:         '#ea80fc',
+  TRAFFIC_HAZARD:      '#ffd740',
+  RAIL_OPERATIONS:     '#90a4ae',
+  RAIL_INCIDENT:       '#ff5252',
   // ── Fire (red-orange family) ──────────────────────────────────────
   STRUCTURE_FIRE:      '#ff3d00',   // deep red-orange — most severe
   VEHICLE_FIRE:        '#ff6d00',   // orange — vehicle fire

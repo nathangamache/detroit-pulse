@@ -1,46 +1,26 @@
 import { useState, useEffect, useRef } from 'react'
 import { formatTime, formatAge, getTagClass, INCIDENT_LABELS, PRIORITY_COLORS } from '../utils/incidents'
 
-const API = ''
+import { API } from '../api'
 const CHUNK_POLL_INTERVAL = 3000   // poll every 3s while ACTIVE
 
-const FEED_LABELS = {
-  wayneco_downriver:                'Downriver Public Safety',
-  wayneco_detroit_police_fire:      'Detroit Police and Fire',
-  wayneco_detroit_police_dispatch:  'Detroit Police Dispatch',
-  wayneco_detroit_fire:             'Detroit Fire',
-  wayneco_public_safety:            'Wayne County Public Safety',
-  wayneco_westland_gardencity:      'Westland-Garden City',
-  wayneco_dearborn:                 'Dearborn Police and Fire',
-  wayneco_grossepointe:             'Grosse Pointes and Harper Woods',
-  wayneco_plymouthnorthville:       'Plymouth-Northville Public Safety',
-  wayneco_southwestern:             'Southwestern Wayne County',
-  wayneco_detroit_ems:              'Detroit EMS',
-  wayneco_romulus:                  'Romulus-Huron Township',
-  wayneco_northville_plymouth_city: 'Northville / Plymouth City Fire',
-  wayneco_franklin_bingham:         'Franklin-Bingham Fire',
-  oaklandco_royaloak_fire:          'Royal Oak Fire',
-  washtenaw_metro:                  'Washtenaw Metro',
-  washtenaw_livingston:             'Livingston County',
-}
-
-const FEED_ACCENT = {
-  wayneco:    '#3b82f6',
-  oaklandco:  '#10b981',
-  washtenaw:  '#f59e0b',
-}
+// Channel labels come from the API (config/channels.yaml); fetched once per page load.
+const CHANNEL_LABELS = {}
+fetch(`${API}/channels`).then(r => r.json()).then(list => {
+  for (const c of list || []) CHANNEL_LABELS[c.id] = c.label
+}).catch(() => {})
 
 function getFeedAccent(feedId) {
   if (!feedId) return 'var(--text-faint)'
-  for (const [k, v] of Object.entries(FEED_ACCENT)) {
-    if (feedId.startsWith(k)) return v
-  }
-  return 'var(--text-faint)'
+  const palette = ['#3b82f6', '#10b981', '#f59e0b', '#a78bfa', '#f472b6', '#22d3ee']
+  let h = 0
+  for (const ch of feedId) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  return palette[h % palette.length]
 }
 
 function FeedChip({ feedId }) {
   if (!feedId) return null
-  const label = FEED_LABELS[feedId] || feedId
+  const label = CHANNEL_LABELS[feedId] || feedId
   const color = getFeedAccent(feedId)
   return (
     <span style={{
@@ -83,7 +63,7 @@ export default function IncidentDetail({ incident, onClose }) {
       .then(r => r.json())
       .then(data => {
         const sorted = (data.chunks || []).sort(
-          (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+          (a, b) => new Date(b.captured_at) - new Date(a.captured_at)
         )
         setChunks(sorted)
         return sorted.length
@@ -147,7 +127,7 @@ export default function IncidentDetail({ incident, onClose }) {
 
   useEffect(() => {
     if (!incident || incident.status === 'RESOLVED') { setTimeRemaining(null); return }
-    const STALE_MS = 48 * 60 * 60 * 1000
+    const STALE_MS = 4 * 60 * 60 * 1000   // INCIDENT_IDLE_RESOLVE_S default (4 h)
     const calculate = () => {
       const lastUpdated = incident.last_updated
         ? new Date(incident.last_updated) : new Date(incident.opened_at)
@@ -358,7 +338,7 @@ export default function IncidentDetail({ incident, onClose }) {
                       <span style={{ ...s.chunkAction, color: actionColor }}>
                         {chunk.correlation_action}
                       </span>
-                      <span style={s.chunkTime}>{formatTime(chunk.timestamp)}</span>
+                      <span style={s.chunkTime}>{formatTime(chunk.captured_at)}</span>
                     </div>
                   </div>
 
